@@ -22,6 +22,7 @@ private enum Validity: String, CaseIterable, Identifiable {
 struct SigningView: View {
   @Environment(InventoryStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.dynamicTypeSize) private var typeSize
   let authority: Authority
   @State private var publicKey = ""
   @State private var principalText = ""
@@ -76,25 +77,21 @@ struct SigningView: View {
         CertificateDetail(certificate: issued)
       } else if let recovery {
         PendingCertificateView(certificate: recovery)
+      } else if let prepared {
+        review(prepared)
       } else {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 20) {
-            if let prepared { review(prepared) } else { editor }
-            if let error {
-              Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier(
-                "signing-error")
-            }
-          }.padding(22)
-        }.pageStyle()
+        editor
       }
-    }.navigationTitle(
+    }
+    .navigationTitle(
       completed
-        ? "Certificate issued"
+        ? "Signed"
         : recovery != nil
-          ? "Save signed certificate"
-          : prepared != nil ? "Review certificate" : "Sign with \(authority.name)"
+          ? "Save Certificate"
+          : prepared != nil ? "Review" : "Sign Key"
     )
     .navigationBarTitleDisplayMode(.inline)
+    .sensoryFeedback(.success, trigger: completed) { _, new in new }
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
         Button(issued == nil && recovery == nil ? "Cancel" : "Done") { dismiss() }.disabled(
@@ -113,88 +110,132 @@ struct SigningView: View {
       }
     }
   }
+  private var validityFooter: String {
+    guard let end = request.validBefore else { return "Never expires." }
+    return "Expires \(dateLabel(end))."
+  }
   private var editor: some View {
-    Group {
-      Panel {
-        Eyebrow(text: "Public key")
-        TextField("ssh-ed25519 AAAA…", text: $publicKey, axis: .vertical).font(
-          .system(.caption, design: .monospaced)
-        ).lineLimit(3...6).textInputAutocapitalization(.never).autocorrectionDisabled().inputStyle()
-          .accessibilityIdentifier("subject-key")
-        HStack {
-          PasteButton(payloadType: String.self) { publicKey = $0.first ?? "" }.buttonBorderShape(
-            .capsule)
-          Spacer()
-          Button("Choose file", systemImage: "doc") { importing = true }
+    Form {
+      Section {
+        TextField(
+          "Public key", text: $publicKey, prompt: Text("ssh-ed25519 AAAA…"), axis: .vertical
+        )
+        .font(.footnote.monospaced()).lineLimit(3...6).textInputAutocapitalization(.never)
+        .autocorrectionDisabled().accessibilityIdentifier("subject-key")
+        if let detected = SubjectKeyKind(publicKey) {
+          Label {
+            HStack {
+              Text(detected.description)
+              if let comment = detected.comment {
+                Spacer()
+                Text(comment).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+              }
+            }
+          } icon: {
+            Image(
+              systemName: detected.supported
+                ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(detected.supported ? .green : .orange)
+          }
+          .font(.subheadline)
+        } else {
+          HStack {
+            PasteButton(payloadType: String.self) { publicKey = $0.first ?? "" }
+            Spacer()
+            Button("Choose File", systemImage: "doc") { importing = true }
+          }
+          .buttonStyle(.borderless).labelStyle(.titleAndIcon)
         }
-        Text("Ed25519, ECDSA, and FIDO2 security-key public keys (ed25519-sk or ecdsa-sk).")
-          .font(.caption).foregroundStyle(.secondary)
+      } header: {
+        Text("Public Key")
+      } footer: {
+        Text("Ed25519, ECDSA, or FIDO2 security key (sk-) in OpenSSH format.")
       }
-      Panel {
-        Eyebrow(text: authority.purpose == .user ? "Usernames" : "Hostnames")
+      Section {
         if !allPrincipals {
           TextField(
-            authority.purpose == .user ? "alice, deploy" : "host.example.com", text: $principalText
-          ).textInputAutocapitalization(.never).autocorrectionDisabled().inputStyle()
-            .accessibilityIdentifier("principals")
+            authority.purpose == .user ? "Usernames" : "Hostnames", text: $principalText,
+            prompt: Text(authority.purpose == .user ? "alice, deploy" : "host.example.com")
+          )
+          .font(.body.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
+          .accessibilityIdentifier("principals")
         }
         Toggle(
           authority.purpose == .user ? "All principals (advanced)" : "All principals",
           isOn: $allPrincipals)
+      } header: {
+        Text(authority.purpose == .user ? "Usernames" : "Hostnames")
+      } footer: {
         if allPrincipals {
           Text(
             authority.purpose == .user
               ? "Requires a CA trusted in the account’s authorized_keys without a principals restriction. Servers using TrustedUserCAKeys reject certificates with no principals. Use explicit usernames for that setup."
               : "This certificate will not restrict which hostname it can represent."
-          ).font(
-            .caption
           ).foregroundStyle(.orange)
+        } else {
+          Text("Separate with commas or spaces.")
         }
       }
-      Panel {
-        Eyebrow(text: "Validity")
+      Section {
         Picker("Valid for", selection: $validity) {
           ForEach(Validity.allCases) { Text($0.rawValue).tag($0) }
         }.accessibilityIdentifier("validity")
         DatePicker("Starts", selection: $start)
         if validity == .custom { DatePicker("Ends", selection: $end) }
-        if validity == .forever {
-          Label("No expiration", systemImage: "infinity").foregroundStyle(Ink.accent)
-        }
+      } header: {
+        Text("Validity")
+      } footer: {
+        Text(validityFooter)
       }
-      Panel {
-        Eyebrow(text: "Identification")
-        TextField("Key ID (optional)", text: $keyID).textInputAutocapitalization(.never)
-          .autocorrectionDisabled().inputStyle().accessibilityIdentifier("key-id")
-        DisclosureGroup("Advanced parameters") {
-          VStack(alignment: .leading, spacing: 16) {
-            TextField("Serial", text: $serial).keyboardType(.numberPad).inputStyle()
-            Text(
-              "Next available: \(store.authority(authority.id)?.nextSerial ?? 1). Serials are reserved before signing."
-            ).font(.caption).foregroundStyle(.secondary)
-            if authority.purpose == .user {
-              ForEach(permissions, id: \.self) { value in
-                Toggle(
-                  permissionLabel(value),
-                  isOn: Binding(
-                    get: { enabledPermissions.contains(value) },
-                    set: {
-                      if $0 {
-                        enabledPermissions.insert(value)
-                      } else {
-                        enabledPermissions.remove(value)
-                      }
-                    }))
-              }
-              TextField("Force command", text: $command, axis: .vertical)
-                .textInputAutocapitalization(.never).autocorrectionDisabled().inputStyle()
-              TextField("Source CIDRs, comma separated", text: $source, axis: .vertical)
-                .textInputAutocapitalization(.never).autocorrectionDisabled().inputStyle()
+      Section {
+        TextField("Key ID", text: $keyID, prompt: Text("Optional")).font(.body.monospaced())
+          .textInputAutocapitalization(.never).autocorrectionDisabled()
+          .accessibilityIdentifier("key-id")
+      } header: {
+        Text("Key ID")
+      } footer: {
+        Text("Logged by the server whenever this certificate is used.")
+      }
+      Section {
+        DisclosureGroup("Advanced") {
+          LabeledContent("Serial") {
+            TextField("Serial", text: $serial).keyboardType(.numberPad).font(.body.monospaced())
+              .multilineTextAlignment(.trailing)
+          }
+          if authority.purpose == .user {
+            ForEach(permissions, id: \.self) { value in
+              Toggle(
+                permissionLabel(value),
+                isOn: Binding(
+                  get: { enabledPermissions.contains(value) },
+                  set: {
+                    if $0 {
+                      enabledPermissions.insert(value)
+                    } else {
+                      enabledPermissions.remove(value)
+                    }
+                  }))
             }
-          }.padding(.top, 16)
+            TextField("Force command", text: $command, axis: .vertical).font(.body.monospaced())
+              .textInputAutocapitalization(.never).autocorrectionDisabled()
+            TextField(
+              "Source addresses", text: $source, prompt: Text("Source CIDRs, comma separated"),
+              axis: .vertical
+            )
+            .font(.body.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
+          }
         }
+      } footer: {
+        Text(
+          "Next available serial: \(store.authority(authority.id)?.nextSerial ?? 1). Serials are reserved before signing."
+        )
       }
-      PrimaryAction(title: "Review certificate", busy: working) {
+    }
+    .scrollDismissesKeyboard(.interactively)
+    .actionBar {
+      errorText
+      PrimaryButton(title: "Review", busy: working) {
         working = true
         error = nil
         Task {
@@ -204,58 +245,123 @@ struct SigningView: View {
             acknowledgeDuplicate = false
           } catch { self.error = error.localizedDescription }
         }
-      }.accessibilityIdentifier("review-certificate")
+      }
+      .disabled(publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      .accessibilityIdentifier("review-certificate")
     }
+  }
+  @ViewBuilder private var errorText: some View {
+    if let error {
+      Text(error).font(.footnote).foregroundStyle(.red).frame(maxWidth: .infinity)
+        .accessibilityIdentifier("signing-error")
+    }
+  }
+  private var editButton: some View {
+    Button {
+      prepared = nil
+    } label: {
+      Text("Edit").fontWeight(.semibold).padding(.horizontal, 10).padding(.vertical, 4)
+        .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil)
+    }
+    .buttonStyle(.glass).controlSize(.large).disabled(working)
   }
   private func review(_ prepared: Prepared) -> some View {
     let matches = store.duplicates(prepared)
-    return Group {
-      Panel {
-        Eyebrow(text: "Signing authority")
-        Text(authority.name).font(.title2.weight(.semibold))
-        Fingerprint(value: authority.fingerprint)
+    return List {
+      Section("Signing Authority") {
+        HStack(spacing: 14) {
+          SealTile(fingerprint: authority.fingerprint)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(authority.name).font(.headline)
+            Text(authority.fingerprint).font(.caption.monospaced()).foregroundStyle(.secondary)
+              .lineLimit(1).truncationMode(.middle)
+          }
+        }
+        .accessibilityElement(children: .combine)
       }
-      RequestInspection(request: prepared.request, subjectFingerprint: prepared.subjectFingerprint)
       if !matches.isEmpty {
-        Panel {
-          Label("Matching certificate already issued", systemImage: "exclamationmark.triangle")
+        Section {
+          Label("Matching certificate already issued", systemImage: "exclamationmark.triangle.fill")
             .font(.headline).foregroundStyle(.orange)
-          Text("These certificates are still valid or overlap the requested interval.").font(
-            .subheadline
-          ).foregroundStyle(.secondary)
           ForEach(matches) { match in
             NavigationLink {
               CertificateDetail(certificate: match)
             } label: {
-              Text("\(match.title) · #\(match.payload.request.serial)")
+              CertificateRow(certificate: match, showsAuthority: false)
             }
           }
           Toggle("Issue another certificate", isOn: $acknowledgeDuplicate).accessibilityIdentifier(
             "allow-duplicate")
-        }.accessibilityIdentifier("duplicate-warning")
+        } footer: {
+          Text("These certificates are still valid or overlap the requested interval.")
+        }
+        .accessibilityIdentifier("duplicate-warning")
       }
-      PrimaryAction(title: "Authenticate & sign", symbol: "signature", busy: working || store.busy)
-      {
-        working = true
-        error = nil
-        Task {
-          defer { working = false }
-          do {
-            issued = try await store.issue(
-              prepared, authorityID: authority.id, allowDuplicate: acknowledgeDuplicate)
-          } catch {
-            self.error = error.localizedDescription
-            if let pending = store.pendingCertificate {
-              recovery = pending
-              return
+      RequestInspection(request: prepared.request, subjectFingerprint: prepared.subjectFingerprint)
+    }
+    .actionBar {
+      errorText
+      // Side by side normally; stacked, primary first, at accessibility sizes.
+      let layout =
+        typeSize.isAccessibilitySize
+        ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 12))
+      layout {
+        if !typeSize.isAccessibilitySize { editButton }
+        PrimaryButton(title: "Sign Certificate", symbol: "faceid", busy: working || store.busy) {
+          working = true
+          error = nil
+          Task {
+            defer { working = false }
+            do {
+              issued = try await store.issue(
+                prepared, authorityID: authority.id, allowDuplicate: acknowledgeDuplicate)
+            } catch {
+              self.error = error.localizedDescription
+              if let pending = store.pendingCertificate {
+                recovery = pending
+                return
+              }
+              // A failed attempt may have reserved the serial already.
+              serial =
+                (store.authority(authority.id)?.nextSerial ?? authority.nextSerial).description
+              self.prepared = nil
             }
-            // A failed attempt may have reserved the serial already.
-            serial = (store.authority(authority.id)?.nextSerial ?? authority.nextSerial).description
-            self.prepared = nil
           }
         }
-      }.disabled(!matches.isEmpty && !acknowledgeDuplicate).accessibilityIdentifier("confirm-sign")
-      Button("Edit parameters") { self.prepared = nil }.frame(maxWidth: .infinity).disabled(working)
+        .disabled(!matches.isEmpty && !acknowledgeDuplicate).accessibilityIdentifier("confirm-sign")
+        if typeSize.isAccessibilitySize { editButton }
+      }
+    }
+  }
+}
+/// Recognizes what was pasted before the core validates it, so mistakes such as
+/// a private key or an RSA key are caught while the person is still looking.
+struct SubjectKeyKind {
+  let description: String
+  let supported: Bool
+  let comment: String?
+  init?(_ text: String) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if trimmed.hasPrefix("-----BEGIN") {
+      (description, supported, comment) = ("Private key. Paste the .pub file instead.", false, nil)
+      return
+    }
+    let fields = trimmed.split(whereSeparator: \.isWhitespace)
+    let type = String(fields[0])
+    comment = fields.count > 2 ? fields[2...].joined(separator: " ") : nil
+    switch type {
+    case "ssh-ed25519": (description, supported) = ("Ed25519", true)
+    case "ecdsa-sha2-nistp256": (description, supported) = ("ECDSA P-256", true)
+    case "ecdsa-sha2-nistp384": (description, supported) = ("ECDSA P-384", true)
+    case "ecdsa-sha2-nistp521": (description, supported) = ("ECDSA P-521", true)
+    case "sk-ssh-ed25519@openssh.com": (description, supported) = ("Ed25519 security key", true)
+    case "sk-ecdsa-sha2-nistp256@openssh.com":
+      (description, supported) = ("ECDSA security key", true)
+    case "ssh-rsa": (description, supported) = ("RSA keys aren’t supported.", false)
+    case _ where type.hasSuffix("-cert-v01@openssh.com"):
+      (description, supported) = ("Certificate. Paste the key it certifies instead.", false)
+    default: return nil
     }
   }
 }

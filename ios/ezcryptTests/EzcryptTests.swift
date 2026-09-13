@@ -159,4 +159,65 @@ final class EzcryptTests: XCTestCase {
     XCTAssertNil(restored.payload.request.validBefore)
     XCTAssertEqual(restored.status(at: Date(timeIntervalSince1970: 10_000_000_000)), .valid)
   }
+  func testValiditySummary() {
+    var request = request("public")
+    request.validAfter = 100
+    request.validBefore = 200
+    XCTAssertTrue(validitySummary(request, at: Date(timeIntervalSince1970: 50)).hasPrefix("Starts"))
+    XCTAssertTrue(
+      validitySummary(request, at: Date(timeIntervalSince1970: 150)).hasPrefix("Expires"))
+    XCTAssertTrue(
+      validitySummary(request, at: Date(timeIntervalSince1970: 200)).hasPrefix("Expired"))
+    request.validBefore = nil
+    XCTAssertEqual(validitySummary(request, at: Date(timeIntervalSince1970: 150)), "Never expires")
+  }
+  /// Reference art printed by OpenSSH's `ssh-keygen -lv` for the same keys.
+  func testRandomartMatchesOpenSSH() throws {
+    let ed25519 = try XCTUnwrap(
+      Randomart(fingerprint: "SHA256:qAuQaUD/OmQO7ZsJl4QVcjLf23xY8WaR5aJL+yL/qj8"))
+    XCTAssertEqual(
+      ed25519.text(title: KeyAlgorithm.ed25519.randomartTitle),
+      """
+      +--[ED25519 256]--+
+      | = o     . .o.   |
+      |. B o     o.o    |
+      |.  + .   . = .   |
+      |.o+ . +.o + .    |
+      |++ = o.+S+       |
+      |..B o.  o o      |
+      | ..B.    o       |
+      |  o.=. . E.      |
+      |   +.  .=+=o     |
+      +----[SHA256]-----+
+      """)
+    let p521 = try XCTUnwrap(
+      Randomart(fingerprint: "SHA256:sxuBYyW/cVkB4WiYT3kUrq7GFp56hpNLv123hZ2o+Ec"))
+    XCTAssertEqual(
+      p521.text(title: KeyAlgorithm.p521.randomartTitle),
+      """
+      +---[ECDSA 521]---+
+      |          =+.    |
+      |       o *   .   |
+      |      + * + .    |
+      |       O o o     |
+      |      + S o      |
+      |     ..o B  E+ . |
+      |    .= o= ..+ +  |
+      |   .+.Oo = o.o   |
+      |    oO+.+.o..    |
+      +----[SHA256]-----+
+      """)
+    XCTAssertNil(Randomart(fingerprint: "MD5:00:11"))
+  }
+  func testSubjectKeyKind() {
+    XCTAssertEqual(SubjectKeyKind("ssh-ed25519 AAAA alice@laptop")?.description, "Ed25519")
+    XCTAssertEqual(SubjectKeyKind("ssh-ed25519 AAAA alice@laptop")?.comment, "alice@laptop")
+    XCTAssertEqual(SubjectKeyKind("sk-ecdsa-sha2-nistp256@openssh.com AAAA")?.supported, true)
+    XCTAssertEqual(SubjectKeyKind("ssh-rsa AAAA")?.supported, false)
+    XCTAssertEqual(SubjectKeyKind("-----BEGIN OPENSSH PRIVATE KEY-----")?.supported, false)
+    XCTAssertEqual(
+      SubjectKeyKind("ssh-ed25519-cert-v01@openssh.com AAAA")?.supported, false)
+    XCTAssertNil(SubjectKeyKind("  "))
+    XCTAssertNil(SubjectKeyKind("garbage"))
+  }
 }

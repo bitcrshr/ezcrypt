@@ -13,6 +13,8 @@ CAs, issue and inspect certificates, and export portable encrypted software keys
   including resident keys, through the same paste or file-import flow.
 - Searchable certificate inventory, duplicate/overlap warnings, and exact
   certificate redelivery without another signature.
+- Each CA shows its fingerprint as OpenSSH randomart, identical to
+  `ssh-keygen -lv -f ca.pub`, for quick visual verification on a computer.
 - Encrypted OpenSSH private-key export with a passphrase, or GPG encryption to
   a supplied OpenPGP public key. Neither recovery path requires ezcrypt.
 

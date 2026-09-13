@@ -2,14 +2,14 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-// Vector construction: a compact key, matching the app's ink and mint palette.
+// Vector construction: a compact key in the app's stamp-pad ink.
 let size = 1024
 let context = CGContext(
   data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
-context.setFillColor(CGColor(red: 0.055, green: 0.24, blue: 0.19, alpha: 1))
+context.setFillColor(CGColor(red: 0.204, green: 0.275, blue: 0.784, alpha: 1))
 context.fill(CGRect(x: 0, y: 0, width: size, height: size))
-context.setStrokeColor(CGColor(red: 0.69, green: 0.95, blue: 0.79, alpha: 1))
+context.setStrokeColor(CGColor(red: 0.95, green: 0.96, blue: 1, alpha: 1))
 context.setLineWidth(66)
 context.setLineCap(.round)
 context.setLineJoin(.round)
@@ -22,7 +22,7 @@ for x in [280, 385] {
   context.addLine(to: CGPoint(x: x, y: 425))
   context.strokePath()
 }
-context.setFillColor(CGColor(red: 0.69, green: 0.95, blue: 0.79, alpha: 1))
+context.setFillColor(CGColor(red: 0.95, green: 0.96, blue: 1, alpha: 1))
 context.fillEllipse(in: CGRect(x: 625, y: 485, width: 50, height: 50))
 let url = URL(fileURLWithPath: CommandLine.arguments[1])
 let destination = CGImageDestinationCreateWithURL(

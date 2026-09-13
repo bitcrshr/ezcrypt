@@ -3,94 +3,124 @@ import SwiftUI
 struct CertificatesView: View {
   @Environment(InventoryStore.self) private var store
   @State private var query = ""
-  @State private var status = "All"
-  @State private var purpose = "All"
+  @State private var status: CertificateStatus?
+  @State private var purpose: Purpose?
   var filtered: [CertificateRecord] {
     store.certificates.filter {
       (query.isEmpty || $0.searchable.localizedCaseInsensitiveContains(query))
-        && (status == "All" || $0.status(at: store.now).rawValue == status)
-        && (purpose == "All" || $0.payload.request.purpose.title == purpose)
+        && (status == nil || $0.status(at: store.now) == status)
+        && (purpose == nil || $0.payload.request.purpose == purpose)
     }
   }
   var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 16) {
-        HStack {
-          Menu {
-            Picker("Status", selection: $status) {
-              Text("All").tag("All")
-              ForEach(CertificateStatus.allCases, id: \.rawValue) {
-                Text($0.rawValue).tag($0.rawValue)
+    let filtered = filtered
+    List {
+      ForEach(CertificateStatus.allCases, id: \.self) { group in
+        let members = filtered.filter { $0.status(at: store.now) == group }
+        if !members.isEmpty {
+          Section {
+            ForEach(members) { certificate in
+              NavigationLink {
+                CertificateDetail(certificate: certificate)
+              } label: {
+                CertificateRow(certificate: certificate)
+              }
+              .contextMenu {
+                CopyButton("Copy Certificate", value: certificate.payload.certificate)
               }
             }
-          } label: {
-            Label(
-              status == "All" ? "All statuses" : status, systemImage: "line.3.horizontal.decrease")
-          }
-          Spacer()
-          Menu {
-            Picker("Purpose", selection: $purpose) {
-              Text("All").tag("All")
-              ForEach(Purpose.allCases) { Text($0.title).tag($0.title) }
+          } header: {
+            HStack {
+              Text(group.rawValue)
+              Spacer()
+              Text(members.count, format: .number)
             }
-          } label: {
-            Text(purpose == "All" ? "Users & hosts" : purpose)
           }
-        }.font(.subheadline)
-        HStack {
-          Eyebrow(text: "Certificate inventory")
-          Spacer()
-          Text("\(filtered.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
         }
-        if filtered.isEmpty {
+      }
+    }
+    .overlay {
+      if store.certificates.isEmpty {
+        ContentUnavailableView {
+          Label("No Certificates", systemImage: "checkmark.seal")
+        } description: {
+          Text("Certificates you sign from an authority appear here.")
+        }
+      } else if filtered.isEmpty {
+        if query.isEmpty {
           ContentUnavailableView {
-            Label(
-              store.certificates.isEmpty ? "Nothing issued yet" : "No matches",
-              systemImage: "checkmark.seal")
-          } description: {
-            Text(
-              store.certificates.isEmpty
-                ? "Sign a public key from an authority to start your certificate inventory."
-                : "Try a principal, key ID, serial, CA name, or fingerprint.")
+            Label("No Matches", systemImage: "line.3.horizontal.decrease")
+          } actions: {
+            Button("Clear Filters") {
+              status = nil
+              purpose = nil
+            }
           }
+        } else {
+          ContentUnavailableView.search(text: query)
         }
-        ForEach(filtered) { certificate in
-          NavigationLink {
-            CertificateDetail(certificate: certificate)
-          } label: {
-            CertificateRow(certificate: certificate)
-          }.buttonStyle(.plain)
+      }
+    }
+    .navigationTitle("Certificates")
+    .searchable(text: $query, prompt: "Principal, key ID, serial, fingerprint")
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Menu {
+          Picker("Status", selection: $status) {
+            Text("Any Status").tag(CertificateStatus?.none)
+            ForEach(CertificateStatus.allCases, id: \.self) {
+              Label($0.rawValue, systemImage: $0.symbol).tag(Optional($0))
+            }
+          }
+          Picker("Type", selection: $purpose) {
+            Text("Users & Hosts").tag(Purpose?.none)
+            ForEach(Purpose.allCases) { Text($0.title).tag(Optional($0)) }
+          }
+        } label: {
+          Label(
+            "Filter",
+            systemImage: status == nil && purpose == nil
+              ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
         }
-      }.padding(22)
-    }.pageStyle().navigationTitle("Certificates").searchable(
-      text: $query, prompt: "Principal, key ID, fingerprint…")
+      }
+    }
   }
 }
 struct CertificateRow: View {
   @Environment(InventoryStore.self) private var store
+  @Environment(\.dynamicTypeSize) private var typeSize
   let certificate: CertificateRecord
+  var showsAuthority = true
   var body: some View {
-    Panel {
-      HStack(alignment: .firstTextBaseline) {
-        Text(certificate.title.isEmpty ? "All principals" : certificate.title).font(.headline)
-        Spacer()
-        StatusPill(status: certificate.status(at: store.now))
+    let request = certificate.payload.request
+    let layout =
+      typeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+      : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+    VStack(alignment: .leading, spacing: 4) {
+      layout {
+        Text(certificate.title.isEmpty ? "All principals" : certificate.title)
+          .font(.body.monospaced().weight(.semibold)).lineLimit(
+            typeSize.isAccessibilitySize ? 3 : 1
+          )
+          // Expired certificates recede, so they read as history among valid ones.
+          .foregroundStyle(certificate.status(at: store.now) == .expired ? .secondary : .primary)
+        if !typeSize.isAccessibilitySize { Spacer(minLength: 12) }
+        Text(validitySummary(request, at: store.now)).font(.footnote)
+          .foregroundStyle(validityTint(request, at: store.now))
+          .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
       }
       Text(
-        certificate.payload.request.principals.isEmpty
-          ? "All principals" : certificate.payload.request.principals.joined(separator: ", ")
-      ).font(.subheadline).foregroundStyle(.secondary)
-      HStack {
-        Text(certificate.authorityName)
-        Spacer()
-        Text("#\(certificate.payload.request.serial)").monospaced()
-      }.font(.caption).foregroundStyle(.secondary)
-      Text(
-        certificate.payload.request.validBefore == nil
-          ? "No expiration" : "Until \(dateLabel(certificate.payload.request.validBefore))"
-      ).font(.caption).foregroundStyle(
-        certificate.payload.request.validBefore == nil ? Ink.accent : .secondary)
-    }.accessibilityElement(children: .combine)
+        [
+          request.allPrincipals ? "any principal" : request.principals.joined(separator: ", "),
+          showsAuthority ? certificate.authorityName : nil, "#\(request.serial)",
+        ].compactMap { $0 }.joined(separator: " · ")
+      )
+      .font(.subheadline).foregroundStyle(.secondary).lineLimit(
+        typeSize.isAccessibilitySize ? 3 : 1)
+    }
+    .padding(.vertical, 2)
+    .accessibilityElement(children: .combine)
   }
 }
 struct CertificateDetail: View {
@@ -98,49 +128,57 @@ struct CertificateDetail: View {
   let certificate: CertificateRecord
   @State private var file: URL?
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        Panel {
-          HStack {
-            Eyebrow(text: "\(certificate.payload.request.purpose.title) certificate")
-            Spacer()
-            StatusPill(status: certificate.status(at: store.now))
-          }
-          Text(certificate.title.isEmpty ? "All principals" : certificate.title).font(
-            .title.weight(.semibold))
-          LabeledValue(title: "Issued by", value: certificate.authorityName)
-          Fingerprint(value: certificate.payload.caFingerprint)
-          HStack {
+    let request = certificate.payload.request
+    let status = certificate.status(at: store.now)
+    List {
+      Section {
+        VStack(spacing: 10) {
+          StatusLabel(status: status)
+          Text(certificate.title.isEmpty ? "All principals" : certificate.title)
+            .font(.title2.monospaced().weight(.semibold)).multilineTextAlignment(.center)
+            .textSelection(.enabled)
+          Text(
+            "\(request.purpose.title) certificate · \(validitySummary(request, at: store.now))"
+          )
+          .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+          HStack(spacing: 12) {
             if let file {
               ShareLink(item: file) {
-                Label("Share certificate", systemImage: "square.and.arrow.up")
+                Label("Share", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
               }.accessibilityIdentifier("share-certificate")
             }
-            Spacer()
-            Button("Copy", systemImage: "document.on.document") {
-              UIPasteboard.general.string = certificate.payload.certificate
-            }
+            CopyButton("Copy", value: certificate.payload.certificate, expands: true)
           }
+          .labelStyle(.titleAndIcon).buttonStyle(.glass).controlSize(.large).padding(.top, 10)
         }
-        RequestInspection(
-          request: certificate.payload.request,
-          subjectFingerprint: certificate.payload.subjectFingerprint)
-        Panel {
-          Eyebrow(text: "Recorded")
-          Text(certificate.issuedAt.formatted(date: .abbreviated, time: .standard)).font(
-            .subheadline)
-          DisclosureGroup("OpenSSH certificate") {
-            Text(certificate.payload.certificate).font(.system(.caption2, design: .monospaced))
-              .textSelection(.enabled).padding(.top, 8)
-          }
-        }
-      }.padding(22)
-    }.pageStyle().navigationTitle("Certificate").navigationBarTitleDisplayMode(.inline)
-      .task {
-        do { file = try store.certificateFile(certificate) } catch {
-          store.failure = error.localizedDescription
+        .frame(maxWidth: .infinity).listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+      }
+      RequestInspection(
+        request: request, subjectFingerprint: certificate.payload.subjectFingerprint)
+      Section {
+        ValueRow(title: "Issued by", value: certificate.authorityName, token: false)
+        TokenBlock(title: "CA fingerprint", value: certificate.payload.caFingerprint)
+        ValueRow(
+          title: "Signed",
+          value: certificate.issuedAt.formatted(date: .abbreviated, time: .shortened),
+          token: false)
+      } header: {
+        Text("Authority")
+      }
+      Section {
+        DisclosureGroup("OpenSSH Certificate") {
+          Text(certificate.payload.certificate).font(.caption.monospaced()).textSelection(
+            .enabled)
         }
       }
+    }
+    .navigationTitle("Certificate").navigationBarTitleDisplayMode(.inline)
+    .task {
+      do { file = try store.certificateFile(certificate) } catch {
+        store.failure = error.localizedDescription
+      }
+    }
   }
 }
 
@@ -154,75 +192,85 @@ struct PendingCertificateView: View {
     if let saved = store.certificates.first(where: { $0.id == certificate.id }) {
       CertificateDetail(certificate: saved)
     } else {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 20) {
-          Panel {
-            Label(
-              "Certificate signed, not yet saved",
-              systemImage: "externaldrive.badge.exclamationmark"
-            )
-            .font(.headline)
-            Text(
-              "The signature is complete. Retry saving to deliver this certificate without signing again. Keep ezcrypt open until it is saved."
-            )
-            if let error { Text(error).foregroundStyle(.red) }
-            PrimaryAction(title: "Retry saving certificate", symbol: "square.and.arrow.down") {
-              do {
-                try store.savePendingCertificate()
-                error = nil
-              } catch { self.error = error.localizedDescription }
-            }.disabled(store.pendingCertificate?.id != certificate.id || store.busy)
-              .accessibilityIdentifier("retry-certificate-save")
-          }
-          RequestInspection(
-            request: certificate.payload.request,
-            subjectFingerprint: certificate.payload.subjectFingerprint)
-        }.padding(22)
-      }.pageStyle().navigationTitle("Save signed certificate")
+      List {
+        Section {
+          Label("Signed, not yet saved", systemImage: "exclamationmark.triangle.fill")
+            .font(.headline).foregroundStyle(.orange)
+        } footer: {
+          Text(
+            "The signature is complete. Saving stores this exact certificate without signing again. Keep the app open until it’s saved."
+          )
+        }
+        RequestInspection(
+          request: certificate.payload.request,
+          subjectFingerprint: certificate.payload.subjectFingerprint)
+      }
+      .navigationTitle("Save Certificate").navigationBarTitleDisplayMode(.inline)
+      .actionBar {
+        if let error {
+          Text(error).font(.footnote).foregroundStyle(.red).frame(maxWidth: .infinity)
+        }
+        PrimaryButton(title: "Save Certificate", symbol: "square.and.arrow.down") {
+          do {
+            try store.savePendingCertificate()
+            error = nil
+          } catch { self.error = error.localizedDescription }
+        }
+        .disabled(store.pendingCertificate?.id != certificate.id || store.busy)
+        .accessibilityIdentifier("retry-certificate-save")
+      }
     }
   }
 }
+/// The signed (or about to be signed) fields, as sections of a List.
 struct RequestInspection: View {
   let request: SigningRequest
   let subjectFingerprint: String
   var body: some View {
-    Panel {
-      Eyebrow(text: "Subject & validity")
-      Fingerprint(value: subjectFingerprint)
-      DisclosureGroup("Subject public key") {
-        Text(request.publicKey).font(.system(.caption, design: .monospaced)).textSelection(
-          .enabled)
+    Section {
+      if request.allPrincipals {
+        Text("Any principal").font(.body.monospaced())
       }
-      LabeledValue(
-        title: "Principals",
-        value: request.allPrincipals
-          ? "All principals" : request.principals.joined(separator: ", "))
+      ForEach(request.principals, id: \.self) { principal in
+        Text(principal).font(.body.monospaced()).textSelection(.enabled)
+      }
+    } header: {
+      Text(request.purpose == .user ? "Usernames" : "Hostnames")
+    } footer: {
       if request.purpose == .user && request.allPrincipals {
         Text(
           "Not accepted by TrustedUserCAKeys. Requires per-account CA trust in authorized_keys without a principals restriction."
-        )
-        .font(.caption).foregroundStyle(.orange)
+        ).foregroundStyle(.orange)
       }
-      LabeledValue(title: "Key ID", value: request.keyID.isEmpty ? "None" : request.keyID)
-      LabeledValue(title: "Serial", value: request.serial)
-      Divider()
-      LabeledValue(title: "Valid from", value: dateLabel(request.validAfter))
-      LabeledValue(title: "Valid until", value: dateLabel(request.validBefore))
-      Text("Times shown in \(TimeZone.current.identifier). The end time is exclusive.").font(
-        .caption
-      ).foregroundStyle(.secondary)
+    }
+    Section {
+      ValueRow(title: "From", value: dateLabel(request.validAfter), token: false)
+      ValueRow(title: "Until", value: dateLabel(request.validBefore), token: false)
+    } header: {
+      Text("Validity")
+    } footer: {
+      Text("Times in \(TimeZone.current.identifier). The end time is exclusive.")
+    }
+    Section {
+      ValueRow(title: "Key ID", value: request.keyID.isEmpty ? "None" : request.keyID)
+      ValueRow(title: "Serial", value: request.serial)
+      TokenBlock(title: "Fingerprint", value: subjectFingerprint)
+      DisclosureGroup("Public Key") {
+        Text(request.publicKey).font(.caption.monospaced()).textSelection(.enabled)
+      }
+    } header: {
+      Text("Subject Key")
     }
     if request.purpose == .user {
-      Panel {
-        Eyebrow(text: "Permissions & restrictions")
+      Section("Permissions") {
         if request.extensions.isEmpty {
-          Text("No optional permissions").foregroundStyle(.secondary)
+          Text("None").foregroundStyle(.secondary)
         }
         ForEach(request.extensions.keys.sorted(), id: \.self) { name in
-          Label(permissionLabel(name), systemImage: "checkmark").font(.subheadline)
+          Label(permissionLabel(name), systemImage: "checkmark")
         }
         ForEach(request.criticalOptions.keys.sorted(), id: \.self) { name in
-          LabeledValue(title: name, value: request.criticalOptions[name] ?? "")
+          ValueRow(title: optionLabel(name), value: request.criticalOptions[name] ?? "")
         }
       }
     }
@@ -239,6 +287,13 @@ func permissionLabel(_ value: String) -> String {
   case "permit-agent-forwarding": "Agent forwarding"
   case "permit-X11-forwarding": "X11 forwarding"
   case "permit-user-rc": "User rc"
+  default: value
+  }
+}
+func optionLabel(_ value: String) -> String {
+  switch value {
+  case "force-command": "Force command"
+  case "source-address": "Source addresses"
   default: value
   }
 }

@@ -17,8 +17,8 @@ struct EzcryptApp: App {
         }
         .overlay {
           if phase != .active {
-            Ink.canvas.ignoresSafeArea().overlay {
-              Image(systemName: "key.horizontal").font(.largeTitle).foregroundStyle(Ink.accent)
+            Color(.systemBackground).ignoresSafeArea().overlay {
+              Image(systemName: "lock.fill").font(.largeTitle).foregroundStyle(.tertiary)
             }
           }
         }
@@ -62,10 +62,19 @@ struct AppView: View {
     }
     .safeAreaInset(edge: .top) {
       if let pending = store.pendingCertificate {
-        Button("Certificate signed. Tap to finish saving.") {
+        Button {
           recovery = pending
+        } label: {
+          HStack {
+            Label("Signed certificate not saved", systemImage: "exclamationmark.triangle.fill")
+            Spacer()
+            Text("Finish").fontWeight(.semibold)
+          }
+          .font(.subheadline).foregroundStyle(.orange).padding(.horizontal, 20).padding(
+            .vertical, 12
+          )
+          .background(Color.orange.opacity(0.12))
         }
-        .padding().frame(maxWidth: .infinity).background(Color.orange.opacity(0.2))
       }
     }
     .sheet(item: $recovery) { certificate in
