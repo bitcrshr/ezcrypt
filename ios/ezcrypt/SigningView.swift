@@ -127,6 +127,8 @@ struct SigningView: View {
           Spacer()
           Button("Choose file", systemImage: "doc") { importing = true }
         }
+        Text("Ed25519, ECDSA, and FIDO2 security-key public keys (ed25519-sk or ecdsa-sk).")
+          .font(.caption).foregroundStyle(.secondary)
       }
       Panel {
         Eyebrow(text: authority.purpose == .user ? "Usernames" : "Hostnames")

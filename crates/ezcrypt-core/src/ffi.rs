@@ -217,7 +217,7 @@ fn dispatch(
                         json!({"data": STANDARD.encode(passphrase.as_ref().ok_or_else(|| invalid("Passphrase export missing"))?.encrypt(key)?), "extension": "key"}),
                     ),
                     "gpg" => Ok(
-                        json!({"data": STANDARD.encode(gpg.as_ref().ok_or_else(|| invalid("GPG export missing"))?.encrypt(key)?), "extension": "gpg"}),
+                        json!({"data": STANDARD.encode(gpg.as_ref().ok_or_else(|| invalid("GPG export missing"))?.encrypt(key)?), "extension": "asc"}),
                     ),
                     _ => Err(invalid("Unsupported export format")),
                 },

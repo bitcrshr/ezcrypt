@@ -127,6 +127,87 @@ fn all_algorithms_sign_and_export_to_openssh() {
     }
 }
 #[test]
+fn security_key_subjects_preserve_application_and_validate_in_openssh() {
+    let path = fixture("security-keys");
+    // Synthetic public fixtures exercise the wire format without a physical
+    // authenticator. Enrollment/residency is not encoded in an SSH public key.
+    for (subject_alg, primitive, cert_type) in [
+        (
+            "sk-ssh-ed25519@openssh.com",
+            Algorithm::Ed25519,
+            "sk-ssh-ed25519-cert-v01@openssh.com",
+        ),
+        (
+            "sk-ecdsa-sha2-nistp256@openssh.com",
+            certificate::algorithm("p256").unwrap(),
+            "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com",
+        ),
+    ] {
+        let key = PrivateKey::random(&mut OsRng, primitive).unwrap();
+        let ordinary = key.public_key().to_bytes().unwrap();
+        let alg_len = u32::from_be_bytes(ordinary[..4].try_into().unwrap()) as usize;
+        let field = |wire: &mut Vec<u8>, value: &[u8]| {
+            wire.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            wire.extend_from_slice(value);
+        };
+        for application in ["ssh:", "ssh:ezcrypt-resident-test"] {
+            let mut wire = Vec::new();
+            field(&mut wire, subject_alg.as_bytes());
+            wire.extend_from_slice(&ordinary[4 + alg_len..]);
+            let no_application = format!("{subject_alg} {}", STANDARD.encode(&wire));
+            assert!(certificate::parse_public(&no_application).is_err());
+            field(&mut wire, application.as_bytes());
+            let public_line = format!("{subject_alg} {} test", STANDARD.encode(&wire));
+            let subject = certificate::parse_public(&public_line).unwrap();
+            let mut req = request();
+            req.public_key = public_line;
+            for ca_alg in ["ed25519", "p256", "p384", "p521"] {
+                let ca = PrivateKey::random(&mut OsRng, certificate::algorithm(ca_alg).unwrap())
+                    .unwrap();
+                for forever in [false, true] {
+                    req.valid_before = if forever { None } else { Some(2_000_000_000) };
+                    let issued = certificate::issue(&req, Purpose::User, &ca).unwrap();
+                    assert!(issued.certificate.starts_with(&format!("{cert_type} ")));
+                    assert_eq!(
+                        issued.subject_fingerprint,
+                        subject.fingerprint(ssh_key::HashAlg::Sha256).to_string()
+                    );
+                    if !forever {
+                        let cert = Certificate::from_openssh(&issued.certificate).unwrap();
+                        assert_eq!(cert.public_key(), subject.key_data());
+                        cert.validate_at(
+                            1_800_000_000,
+                            &[ca.public_key().fingerprint(ssh_key::HashAlg::Sha256)],
+                        )
+                        .unwrap();
+                    }
+                    let file = path.join(format!("{subject_alg}-{ca_alg}-{forever}-cert.pub"));
+                    fs::write(&file, issued.certificate).unwrap();
+                    let output = run(Command::new("ssh-keygen").arg("-Lf").arg(file));
+                    assert!(output.contains(cert_type), "{output}");
+                    assert!(output.contains("force-command echo hello"), "{output}");
+                    assert!(!output.contains("no-touch-required"));
+                }
+            }
+            // Applications are part of subject identity, including duplicate checks.
+            let mut other = req.clone();
+            let mut other_wire = wire[..wire.len() - application.len() - 4].to_vec();
+            field(&mut other_wire, b"ssh:different");
+            other.public_key = format!("{subject_alg} {}", STANDARD.encode(&other_wire));
+            assert_ne!(
+                req.duplicate_id(key.public_key()).unwrap(),
+                other.duplicate_id(key.public_key()).unwrap()
+            );
+            wire.pop();
+            assert!(certificate::parse_public(&format!(
+                "{subject_alg} {}",
+                STANDARD.encode(&wire)
+            ))
+            .is_err());
+        }
+    }
+}
+#[test]
 fn envelope_tampering_and_wrong_device_fail_closed() {
     let device = SecretKey::random(&mut OsRng);
     let record = vault::create(
@@ -352,7 +433,11 @@ fn gpg_portable_export_and_recipient_validation() {
             PrivateKey::random(&mut OsRng, certificate::algorithm(algorithm).unwrap()).unwrap();
         assert!(export::gpg(&key, &armor, "wrong recipient").is_err());
         let encrypted = export::gpg(&key, &certified, &fp).unwrap();
-        let file = home.join(format!("{algorithm}.gpg"));
+        let armored = std::str::from_utf8(&encrypted).unwrap();
+        assert!(armored.is_ascii());
+        assert!(armored.starts_with("-----BEGIN PGP MESSAGE-----\n"));
+        assert!(armored.trim_end().ends_with("-----END PGP MESSAGE-----"));
+        let file = home.join(format!("{algorithm}.asc"));
         fs::write(&file, encrypted).unwrap();
         let restored = run(gpg().arg("--decrypt").arg(&file));
         let restored = Zeroizing::new(restored);

@@ -64,8 +64,13 @@ pub fn parse_public(input: &str) -> Result<PublicKey> {
     }
     let key = PublicKey::from_openssh(input.trim())?;
     match key.algorithm() {
-        Algorithm::Ed25519 | Algorithm::Ecdsa { .. } => Ok(key),
-        _ => Err(invalid("Use an Ed25519 or P-256/384/521 public key")),
+        Algorithm::Ed25519
+        | Algorithm::Ecdsa { .. }
+        | Algorithm::SkEd25519
+        | Algorithm::SkEcdsaSha2NistP256 => Ok(key),
+        _ => Err(invalid(
+            "Use an Ed25519, P-256/384/521, Ed25519-SK, or ECDSA-SK public key",
+        )),
     }
 }
 
@@ -212,7 +217,7 @@ pub fn issue(
     let ca_bytes = ca.to_bytes()?;
     let public_bytes = public.to_bytes()?;
     let alg_len = u32::from_be_bytes(public_bytes[..4].try_into()?) as usize;
-    let cert_alg = format!("{}-cert-v01@openssh.com", public.algorithm().as_str());
+    let cert_alg = public.algorithm().to_certificate_type();
     let mut wire = Vec::new();
     string(&mut wire, cert_alg.as_bytes());
     let mut nonce = [0; 32];

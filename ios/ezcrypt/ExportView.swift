@@ -14,6 +14,7 @@ struct ExportView: View {
   @State private var error: String?
   @State private var importing = false
   @State private var checking = false
+  @State private var copied = false
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 20) {
@@ -33,9 +34,25 @@ struct ExportView: View {
                 maxWidth: .infinity
               ).padding(12)
             }.accessibilityIdentifier("share-backup")
+            if file.pathExtension == "asc" {
+              Button {
+                do {
+                  UIPasteboard.general.string = try String(contentsOf: file, encoding: .utf8)
+                  copied = true
+                  error = nil
+                } catch { self.error = error.localizedDescription }
+              } label: {
+                Label(
+                  copied ? "Copied" : "Copy encrypted backup",
+                  systemImage: copied ? "checkmark" : "document.on.document"
+                )
+                .frame(maxWidth: .infinity).padding(12)
+              }.accessibilityIdentifier("copy-backup")
+              if let error { Text(error).foregroundStyle(.red) }
+            }
             Text(
-              useGPG
-                ? "Decrypt with gpg --output ca --decrypt backup.gpg, then chmod 600 ca. The result is an OpenSSH CA private key."
+              file.pathExtension == "asc"
+                ? "Save the copied text as backup.asc, then decrypt with gpg --output ca --decrypt backup.asc and run chmod 600 ca. The result is an OpenSSH CA private key."
                 : "Use directly with ssh-keygen -s, or remove the passphrase with ssh-keygen -p on a trusted computer."
             ).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
           }
@@ -49,7 +66,7 @@ struct ExportView: View {
               TextField("-----BEGIN PGP PUBLIC KEY BLOCK-----", text: $armor, axis: .vertical).font(
                 .system(.caption, design: .monospaced)
               ).lineLimit(3...5).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .inputStyle()
+                .inputStyle().accessibilityIdentifier("export-recipient")
               HStack {
                 Button("Choose public key", systemImage: "doc") { importing = true }
                 Spacer()
@@ -72,7 +89,7 @@ struct ExportView: View {
                 "Use a long, unique passphrase. This backup can recover the CA independently of this device."
               ).font(.caption).foregroundStyle(.secondary)
             }
-          }
+          }.disabled(store.busy)
           if let error { Text(error).foregroundStyle(.red) }
           PrimaryAction(title: "Authenticate & export", symbol: "faceid", busy: store.busy) {
             Task {

@@ -9,6 +9,8 @@ CAs, issue and inspect certificates, and export portable encrypted software keys
 - Face ID, Touch ID, or device passcode gates sensitive operations.
 - Principals, key ID, 64-bit serials, scheduled/finite/**forever** validity,
   PTY/forwarding/user-rc permissions, force-command, and source CIDRs.
+- Sign Ed25519, ECDSA, and FIDO2 SSH public keys (`ed25519-sk` / `ecdsa-sk`),
+  including resident keys, through the same paste or file-import flow.
 - Searchable certificate inventory, duplicate/overlap warnings, and exact
   certificate redelivery without another signature.
 - Encrypted OpenSSH private-key export with a passphrase, or GPG encryption to
@@ -57,10 +59,11 @@ ssh-keygen -y -f backup.key                 # verify/recover its public key
 ssh-keygen -s backup.key -I example -n alice -V +1d subject.pub
 ```
 
-GPG exports contain an OpenSSH private key:
+OpenPGP exports are ASCII-armored `.asc` files containing an encrypted OpenSSH
+private key. Use **Copy encrypted backup** to copy the same armored text:
 
 ```
-gpg --output ca.key --decrypt backup.gpg
+gpg --output ca.key --decrypt backup.asc
 chmod 600 ca.key
 ssh-keygen -y -f ca.key
 ```
@@ -75,6 +78,13 @@ Use explicit usernames with servers configured through `TrustedUserCAKeys`.
 The advanced all-principals user option instead requires per-account CA trust in
 `authorized_keys` without a principals restriction. Source CIDRs must be network
 addresses (such as `192.0.2.0/24`), or `/32`/`/128` for individual addresses.
+
+For FIDO2 keys, paste or import the OpenSSH `.pub` key beginning with
+`sk-ssh-ed25519@openssh.com` or `sk-ecdsa-sha2-nistp256@openssh.com`.
+The certificate preserves the key's application identifier. Resident-key
+discovery and enrollment remain on your computer; ezcrypt only needs the public
+key to certify it. Save the issued certificate alongside the corresponding SSH
+key as `<key-name>-cert.pub`.
 
 Backups currently contain the CA private key, not the inventory. Software-key
 import/restore into ezcrypt, sync, RSA SSH keys, and revocation-list generation

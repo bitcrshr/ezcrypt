@@ -1,7 +1,7 @@
 use crate::{invalid, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use pgp::{
-    composed::{Deserializable, MessageBuilder, SignedPublicKey},
+    composed::{ArmorOptions, Deserializable, MessageBuilder, SignedPublicKey},
     crypto::sym::SymmetricKeyAlgorithm,
     packet::{Packet, PacketHeader, PacketParser, Signature, SignatureType},
     types::{KeyDetails, PacketLength, Tag},
@@ -283,7 +283,9 @@ impl GpgExport {
         let mut message = MessageBuilder::from_reader("ca", Cursor::new(plaintext.as_bytes()))
             .seipd_v1(OsRng, SymmetricKeyAlgorithm::AES256);
         message.encrypt_to_key(OsRng, &self.key.public_subkeys[self.subkey])?;
-        Ok(message.to_vec(OsRng)?)
+        Ok(message
+            .to_armored_string(OsRng, ArmorOptions::default())?
+            .into_bytes())
     }
 }
 pub fn gpg(private: &PrivateKey, armor: &str, expected_fingerprint: &str) -> Result<Vec<u8>> {

@@ -24,7 +24,7 @@ final class EzcryptUITests: XCTestCase {
     capture(app, name: "Authority")
     app.buttons["sign-key"].tap()
     let publicKey =
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIFhmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmAAAAEHNzaDplemNyeXB0LXRlc3Q="
     fillSigning(app, publicKey: publicKey)
     app.buttons["confirm-sign"].tap()
     XCTAssertTrue(app.buttons["share-certificate"].waitForExistence(timeout: 15))

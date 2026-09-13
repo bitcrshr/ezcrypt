@@ -68,8 +68,13 @@ export can sign independently of the phone's authentication thereafter.
 
 ## Certificates and issuance
 
-Certificate framing follows OpenSSH PROTOCOL.certkeys. The public key/signature
-algorithms are Ed25519 and ECDSA nistp256/384/521. Private-key crypto and SSH
+Certificate framing follows OpenSSH PROTOCOL.certkeys and PROTOCOL.u2f. CA
+signature algorithms are Ed25519 and ECDSA nistp256/384/521. Certificate subjects
+also accept `sk-ssh-ed25519@openssh.com` and
+`sk-ecdsa-sha2-nistp256@openssh.com`, preserving their application identifiers
+and using their dedicated certificate type names. Resident and nonresident
+keys share these public formats; no token discovery, enrollment, or hardware
+attestation is performed. Private-key crypto and SSH
 signature encoding use `ssh-key`, with the generated signature verified before
 return. RSA and arbitrary critical options are rejected.
 
@@ -124,8 +129,10 @@ Passphrase export: OpenSSH private-key format, bcrypt-PBKDF (64 rounds, random
 16-byte salt), AES-256-CTR, minimum 12 characters. This is OpenSSH's interoperable
 format, with its format/check-integer checks rather than an AEAD claim.
 GPG export: OpenSSH private key in an AES-256 OpenPGP SEIPDv1 encrypted message,
-using the recipient's valid encryption subkey. Only encrypted output reaches the
-share sheet. Temporary share files contain public certificates or ciphertext.
+using the recipient's valid encryption subkey. The encrypted message is
+ASCII-armored as `BEGIN PGP MESSAGE` and saved with an `.asc` extension. Sharing
+and the Copy encrypted backup button deliver the same armored ciphertext.
+Temporary share files contain public certificates or ciphertext.
 
 OpenPGP recipient parsing bounds input size, accepts one armor block, checks
 definite-length packet framing before composed parsing, and rejects truncated
@@ -143,5 +150,6 @@ revocations omitted from the input or establish who owns a fingerprint.
 - [Apple: protecting keys with the Secure Enclave](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave)
 - [Apple: Secure Enclave P-256 key agreement](https://developer.apple.com/documentation/cryptokit/secureenclave/p256/keyagreement/privatekey)
 - [OpenSSH certificate protocol](https://github.com/openssh/openssh-portable/blob/V_9_9_P2/PROTOCOL.certkeys)
+- [OpenSSH security-key protocol](https://github.com/openssh/openssh-portable/blob/V_9_9_P2/PROTOCOL.u2f)
 - [ssh-keygen manual](https://man.openbsd.org/ssh-keygen.1)
 - [GnuPG operational commands](https://gnupg.org/documentation/manuals/gnupg/Operational-GPG-Commands.html)
