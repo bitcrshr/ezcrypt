@@ -5,12 +5,12 @@ running iOS 26.2, and pinned Rust 1.94.0. No real CA keys or external servers we
 used. The generated test material is confined to ignored `.build/` directories
 and the explicitly marked Simulator demo store.
 
-**Result:** 4 Rust integration tests and 7 Simulator tests passed. Strict Clippy,
+**Result after the review fixes:** 5 Rust integration tests and 8 Simulator tests passed. Strict Clippy,
 rustfmt, and swift-format lint passed. The generic iOS Release build passed.
 
 ## Automated coverage
 
-`just test-core` runs four integration tests plus strict Clippy and rustfmt:
+`just test-core` runs five integration tests plus strict Clippy and rustfmt:
 
 - Each of Ed25519/P-256/P-384/P-521 creates a software envelope, decrypts with the
   matching ECDH key, and issues both host and user certificates, finite and forever.
@@ -23,10 +23,15 @@ rustfmt, and swift-format lint passed. The generic iOS Release build passed.
   subkey. It decrypts exports for all four CA algorithms, and the recovered
   OpenSSH keys match their original public keys. Wrong recipient fingerprints,
   multiple armor blocks, trailing data/packets, an unbound user packet, and an
-  invalid armor checksum are rejected.
+  invalid armor checksum are rejected. Truncated old/new packet headers and
+  bodies are rejected. A valid third-party certification is accepted and exports
+  decrypt with GnuPG; retaining only that certification without a valid
+  self-signature is rejected.
 - Modified ciphertext/nonce/salt/metadata, wrong CA identifier or purpose, and the
   wrong device wrapping key fail. Duplicate normalization and interval boundaries
   are checked, including a genuine unlimited end.
+- IPv4 and IPv6 source CIDRs reject nonzero host bits, including `/0` edge cases;
+  valid network and single-address prefixes remain unchanged.
 
 The iOS tests exercise the public C bridge and native Apple crypto APIs:
 
@@ -36,13 +41,19 @@ The iOS tests exercise the public C bridge and native Apple crypto APIs:
 - Persistent inventory reload, serial allocation, duplicate refusal/override, and
   retaining certificate history after CA removal.
 - A missing device key consumes its reserved serial without issuing a certificate.
-- Corrupt inventory fails closed; validity is start-inclusive/end-exclusive and
-  Forever survives persistence.
+- Corrupt and unsupported-version inventories fail closed across reloads.
+  Replacing the unreadable inventory with valid data allows retry; a missing file
+  on retry does not silently become an empty store.
+- A simulated final-write failure retains the exact signed certificate. Retrying
+  after deleting the signing key persists and returns that same record, without
+  another signature or serial reservation. Repeated retry is a no-op.
+- Validity is start-inclusive/end-exclusive and Forever survives persistence.
 
 The UI test drives creation, public-key entry, Forever validity, certificate
 review/signing/inspection, duplicate warning, encrypted export, and relaunch with
 persisted inventory. It retains screenshots of the authority, issued certificate,
 duplicate warning, and portable backup screens in the Xcode test result bundle.
+The user all-principals toggle is checked for its `TrustedUserCAKeys` warning.
 Light and dark appearance were also inspected visually.
 
 `just check-device` builds the Release app for generic arm64 iOS without code

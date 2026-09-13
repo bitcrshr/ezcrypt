@@ -10,22 +10,41 @@ final class InventoryStore {
   let engine = CryptoEngine()
   let file: URL
   private(set) var pendingCertificate: CertificateRecord?
+  private(set) var now = Date()
+  private let writeInventory: (Data, URL) throws -> Void
 
-  init(file: URL? = nil) {
+  init(
+    file: URL? = nil,
+    writeInventory: @escaping (Data, URL) throws -> Void = {
+      try $0.write(to: $1, options: [.atomic, .completeFileProtection])
+    }
+  ) {
+    self.writeInventory = writeInventory
     self.file =
       file
       ?? URL.applicationSupportDirectory.appending(
         path: RuntimeMode.demo ? "ezcrypt-demo/inventory.json" : "ezcrypt/inventory.json")
+    load(allowMissing: true)
+  }
+  func updateClock(_ date: Date = Date()) { now = date }
+  func reload() {
+    guard !busy, pendingCertificate == nil else { return }
+    load(allowMissing: false)
+  }
+  private func load(allowMissing: Bool) {
     do {
-      if FileManager.default.fileExists(atPath: self.file.path) {
-        inventory = try JSONDecoder().decode(Inventory.self, from: Data(contentsOf: self.file))
-        guard inventory.version == 1 else {
-          throw AppFailure("This inventory was written by a newer version of ezcrypt.")
-        }
-        guard Set(inventory.authorities.map(\.id)).count == inventory.authorities.count,
-          Set(inventory.certificates.map(\.id)).count == inventory.certificates.count
-        else { throw AppFailure("Inventory contains duplicate identifiers.") }
+      let loaded = try JSONDecoder().decode(Inventory.self, from: Data(contentsOf: file))
+      guard loaded.version == 1 else {
+        throw AppFailure("This inventory was written by a newer version of ezcrypt.")
       }
+      guard Set(loaded.authorities.map(\.id)).count == loaded.authorities.count,
+        Set(loaded.certificates.map(\.id)).count == loaded.certificates.count
+      else { throw AppFailure("Inventory contains duplicate identifiers.") }
+      inventory = loaded
+      loadFailure = nil
+    } catch let error as CocoaError where allowMissing && error.code == .fileReadNoSuchFile {
+      // Only first launch may create an empty store. A failed reload must never
+      // replace an existing inventory with an empty writable one.
     } catch { loadFailure = error.localizedDescription }
   }
   var authorities: [Authority] {
@@ -50,7 +69,7 @@ final class InventoryStore {
     values.isExcludedFromBackup = true
     try excluded.setResourceValues(values)  // device-bound vaults require explicit portable exports
     let data = try JSONEncoder().encode(next)
-    try data.write(to: file, options: [.atomic, .completeFileProtection])
+    try writeInventory(data, file)
     inventory = next
   }
   private func begin() throws {
@@ -126,14 +145,15 @@ final class InventoryStore {
     try savePendingCertificate()
     return record
   }
-  func savePendingCertificate() throws {
-    guard let record = pendingCertificate else { return }
+  @discardableResult func savePendingCertificate() throws -> CertificateRecord? {
+    guard let record = pendingCertificate else { return nil }
     var next = inventory
     if !next.certificates.contains(where: { $0.id == record.id }) {
       next.certificates.append(record)
     }
     try persist(next)
     pendingCertificate = nil
+    return record
   }
   func export(
     authority: Authority, password: String, armor: String, fingerprint: String, useGPG: Bool

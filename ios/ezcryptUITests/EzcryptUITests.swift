@@ -62,6 +62,15 @@ final class EzcryptUITests: XCTestCase {
     key.typeText(publicKey)
     let principals = app.textFields["principals"]
     reveal(principals, in: app)
+    let unrestricted = app.switches["All principals (advanced)"]
+    reveal(unrestricted, in: app)
+    unrestricted.tap()
+    XCTAssertTrue(
+      app.staticTexts.matching(
+        NSPredicate(format: "label CONTAINS %@", "Servers using TrustedUserCAKeys reject")
+      ).firstMatch.exists)
+    unrestricted.tap()
+    reveal(principals, in: app)
     principals.tap()
     principals.typeText("alice")
     reveal(app.buttons["validity"], in: app)

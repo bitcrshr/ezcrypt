@@ -7,6 +7,14 @@ struct EzcryptApp: App {
   var body: some Scene {
     WindowGroup {
       AppView().environment(store).tint(Ink.accent)
+        .task(id: phase) {
+          guard phase == .active else { return }
+          if store.loadFailure != nil { store.reload() }
+          while !Task.isCancelled {
+            store.updateClock()
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+          }
+        }
         .overlay {
           if phase != .active {
             Ink.canvas.ignoresSafeArea().overlay {
@@ -19,6 +27,7 @@ struct EzcryptApp: App {
 }
 struct AppView: View {
   @Environment(InventoryStore.self) private var store
+  @State private var recovery: CertificateRecord?
   var body: some View {
     @Bindable var store = store
     VStack(spacing: 0) {
@@ -28,6 +37,9 @@ struct AppView: View {
           Label("Inventory unavailable", systemImage: "externaldrive.badge.exclamationmark")
         } description: {
           Text(error)
+        } actions: {
+          Button("Retry loading inventory") { store.reload() }
+            .accessibilityIdentifier("retry-inventory")
         }
       } else {
         TabView {
@@ -49,14 +61,22 @@ struct AppView: View {
       Text(store.failure ?? "")
     }
     .safeAreaInset(edge: .top) {
-      if store.pendingCertificate != nil {
-        Button("Certificate signed. Tap to retry saving.") {
-          do { try store.savePendingCertificate() } catch {
-            store.failure = error.localizedDescription
-          }
+      if let pending = store.pendingCertificate {
+        Button("Certificate signed. Tap to finish saving.") {
+          recovery = pending
         }
         .padding().frame(maxWidth: .infinity).background(Color.orange.opacity(0.2))
       }
+    }
+    .sheet(item: $recovery) { certificate in
+      NavigationStack {
+        PendingCertificateView(certificate: certificate)
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button("Done") { recovery = nil }
+            }
+          }
+      }.environment(store)
     }
   }
 }

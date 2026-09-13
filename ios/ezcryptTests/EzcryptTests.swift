@@ -95,6 +95,52 @@ final class EzcryptTests: XCTestCase {
     let store = InventoryStore(file: file)
     XCTAssertNotNil(store.loadFailure)
     XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "corrupt")
+    store.reload()
+    XCTAssertNotNil(store.loadFailure)
+    var unsupported = Inventory()
+    unsupported.version = 2
+    try JSONEncoder().encode(unsupported).write(to: file)
+    store.reload()
+    XCTAssertNotNil(store.loadFailure)
+    XCTAssertEqual(store.inventory.version, 1)
+    try JSONEncoder().encode(Inventory()).write(to: file)
+    store.reload()
+    XCTAssertNil(store.loadFailure)
+    try FileManager.default.removeItem(at: file)
+    store.reload()
+    XCTAssertNotNil(store.loadFailure)  // missing on retry is not a new empty store
+  }
+  @MainActor func testSaveRetryDeliversOriginalCertificateWithoutAnotherSignature() async throws {
+    let file = URL.temporaryDirectory.appending(path: UUID().uuidString).appending(
+      path: "inventory.json")
+    var writes = 0
+    let store = InventoryStore(file: file) { data, url in
+      writes += 1
+      // Creation and serial reservation succeed; the signed-result write fails.
+      if writes == 3 { throw AppFailure("Simulated disk write failure") }
+      try data.write(to: url, options: [.atomic, .completeFileProtection])
+    }
+    try await store.create(
+      name: "Save recovery", purpose: .user, custody: .software, algorithm: .ed25519)
+    let ca = try XCTUnwrap(store.authorities.first)
+    let prepared = try await store.prepare(request(ca.publicKey), authority: ca)
+    do {
+      _ = try await store.issue(prepared, authorityID: ca.id, allowDuplicate: false)
+      XCTFail("Injected write failure was not reached")
+    } catch {}
+    let original = try XCTUnwrap(store.pendingCertificate)
+    XCTAssertEqual(writes, 3)
+    XCTAssertTrue(store.certificates.isEmpty)
+    XCTAssertEqual(store.authority(ca.id)?.nextSerial, 2)
+    // Even after removing the signing key, recovery must only persist bytes.
+    try await store.engine.removeKey(ca.id)
+    XCTAssertEqual(try store.savePendingCertificate(), original)
+    XCTAssertNil(store.pendingCertificate)
+    XCTAssertEqual(store.certificates, [original])
+    XCTAssertEqual(InventoryStore(file: file).certificates, [original])
+    XCTAssertEqual(store.authority(ca.id)?.nextSerial, 2)
+    XCTAssertNil(try store.savePendingCertificate())
+    XCTAssertEqual(writes, 4)
   }
   func testValidityBoundariesAndForeverDecoding() throws {
     let payload = IssuedPayload(

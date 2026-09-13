@@ -3,8 +3,8 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use pgp::{
     composed::{Deserializable, MessageBuilder, SignedPublicKey},
     crypto::sym::SymmetricKeyAlgorithm,
-    packet::{Packet, PacketParser, Signature, SignatureType},
-    types::KeyDetails,
+    packet::{Packet, PacketHeader, PacketParser, Signature, SignatureType},
+    types::{KeyDetails, PacketLength, Tag},
 };
 use rand::{rngs::OsRng, RngCore};
 use ssh_encoding::Encode;
@@ -101,6 +101,25 @@ fn live(sig: &Signature, key_created: u32, now: u64) -> bool {
     true
 }
 
+fn recipient_packets(bytes: &[u8]) -> Result<Vec<Packet>> {
+    // PacketParser treats a truncated header as EOF. Check framing separately,
+    // so EOF is accepted only at a packet boundary. Key packets have definite
+    // lengths; streaming/indeterminate bodies are not accepted here.
+    let mut cursor = Cursor::new(bytes);
+    while (cursor.position() as usize) < bytes.len() {
+        let header = PacketHeader::try_from_reader(&mut cursor)?;
+        let PacketLength::Fixed(length) = header.packet_length() else {
+            return Err(invalid("OpenPGP key packets require definite lengths"));
+        };
+        let end = cursor.position() + u64::from(length);
+        if end > bytes.len() as u64 {
+            return Err(invalid("Truncated OpenPGP packet body"));
+        }
+        cursor.set_position(end);
+    }
+    Ok(PacketParser::new(Cursor::new(bytes)).collect::<std::result::Result<_, _>>()?)
+}
+
 // Deliberately accepts one ASCII-armored public certificate only. Validate every
 // packet before the convenience parser, which can discard unsupported packets.
 fn parse_recipient(armor: &str) -> Result<SignedPublicKey> {
@@ -111,7 +130,7 @@ fn parse_recipient(armor: &str) -> Result<SignedPublicKey> {
         .trim()
         .strip_prefix("-----BEGIN PGP PUBLIC KEY BLOCK-----")
         .and_then(|s| s.strip_suffix("-----END PGP PUBLIC KEY BLOCK-----"))
-        .ok_or_else(|| invalid("Supply one armored GPG public key"))?;
+        .ok_or_else(|| invalid("Supply one armored OpenPGP public key"))?;
     let mut payload = String::new();
     let mut data_started = false;
     let mut checksum_seen = false;
@@ -144,8 +163,7 @@ fn parse_recipient(armor: &str) -> Result<SignedPublicKey> {
             return Err(invalid("Invalid GPG armor checksum"));
         }
     }
-    let packets: Vec<Packet> =
-        PacketParser::new(Cursor::new(&bytes)).collect::<std::result::Result<_, _>>()?;
+    let packets = recipient_packets(&bytes)?;
     let mut primaries = 0;
     for packet in &packets {
         match packet {
@@ -165,20 +183,35 @@ fn parse_recipient(armor: &str) -> Result<SignedPublicKey> {
                     ));
                 }
             }
-            _ => return Err(invalid("Unexpected or secret packet in GPG public key")),
+            _ => return Err(invalid("Unexpected or secret packet in OpenPGP public key")),
         }
     }
     if primaries != 1 || !matches!(packets.first(), Some(Packet::PublicKey(_))) {
-        return Err(invalid("Supply exactly one GPG public key"));
+        return Err(invalid("Supply exactly one OpenPGP public key"));
     }
-    let key = SignedPublicKey::from_bytes(Cursor::new(bytes))?;
-    key.verify_bindings()?;
+    let mut key = SignedPublicKey::from_bytes(Cursor::new(bytes))?;
     let canonical = pgp::ser::Serialize::to_bytes(&key)?;
-    let retained: Vec<Packet> =
-        PacketParser::new(Cursor::new(canonical)).collect::<std::result::Result<_, _>>()?;
+    let retained = recipient_packets(&canonical)?;
     if retained.len() != packets.len() {
-        return Err(invalid("Unsupported or unbound packets in GPG key"));
+        return Err(invalid("Unsupported or unbound packets in OpenPGP key"));
     }
+    // Third-party certifications are not needed for encryption. Only signatures
+    // cryptographically verified under the primary may supply policy metadata;
+    // issuer IDs alone are not authentication. Keep the packet-accounting check
+    // above, before intentionally discarding unrelated certifications.
+    for user in &mut key.details.users {
+        user.signatures.retain(|sig| {
+            sig.verify_certification(&key.primary_key, Tag::UserId, &user.id)
+                .is_ok()
+        });
+    }
+    for attribute in &mut key.details.user_attributes {
+        attribute.signatures.retain(|sig| {
+            sig.verify_certification(&key.primary_key, Tag::UserAttribute, &attribute.attr)
+                .is_ok()
+        });
+    }
+    key.verify_bindings()?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let mut self_sigs: Vec<&Signature> = key.details.direct_signatures.iter().collect();
     for user in &key.details.users {
@@ -214,7 +247,7 @@ fn encryption_subkey(key: &SignedPublicKey) -> Result<&pgp::composed::SignedPubl
                 })
         })
         .max_by_key(|sub| sub.created_at().as_secs())
-        .ok_or_else(|| invalid("No valid encryption subkey in this GPG public key"))
+        .ok_or_else(|| invalid("No valid encryption subkey in this OpenPGP public key"))
 }
 
 pub fn recipient_info(armor: &str) -> Result<(String, String)> {
@@ -234,7 +267,7 @@ impl GpgExport {
     pub fn prepare(armor: &str, expected_fingerprint: &str) -> Result<Self> {
         let key = parse_recipient(armor)?;
         if key.fingerprint().to_string() != expected_fingerprint {
-            return Err(invalid("GPG recipient changed after review"));
+            return Err(invalid("OpenPGP recipient changed after review"));
         }
         let selected = encryption_subkey(&key)?.fingerprint();
         let subkey = key

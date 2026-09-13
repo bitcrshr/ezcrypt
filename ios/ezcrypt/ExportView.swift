@@ -43,7 +43,7 @@ struct ExportView: View {
           Panel {
             Picker("Protect with", selection: $useGPG) {
               Text("Passphrase").tag(false)
-              Text("GPG public key").tag(true)
+              Text("OpenPGP public key").tag(true)
             }.pickerStyle(.segmented)
             if useGPG {
               TextField("-----BEGIN PGP PUBLIC KEY BLOCK-----", text: $armor, axis: .vertical).font(

@@ -78,7 +78,10 @@ The stable ssh-key 0.6 certificate builder rejects unsigned timestamps above
 `UINT64_MAX` forever sentinel. JSON uses `null`/absent end time for Forever, and
 serials use decimal strings so all 64 bits survive bridge and UI round trips.
 Finite validity uses Unix seconds and an exclusive end. Empty principals require
-an explicit all-principals choice.
+an explicit all-principals choice. For user certificates, the editor and review
+warn that this is incompatible with `TrustedUserCAKeys`; per-account
+`authorized_keys` CA trust without a principals restriction is required instead.
+Source CIDRs reject nonzero host bits rather than silently broadening the network.
 
 Duplicate identity includes CA and subject fingerprints, purpose, sorted/deduped
 principals, critical options, and permissions. It excludes serial, key ID, and
@@ -93,7 +96,9 @@ with an exported key elsewhere is not globally coordinated.
 
 After signing, the exact certificate is persisted before delivery. A disk-write
 failure retains the signed result in memory and offers retry without signing
-again. A crash between hardware signing and the final disk write can lose an
+again. Recovery stays in the signing flow and opens the saved certificate for
+delivery. If that flow is dismissed, a global recovery entry point offers the
+same operation. A crash between hardware signing and the final disk write can lose an
 undelivered certificate; its serial remains reserved. The app does not claim a
 complete tamper-proof issuance audit.
 
@@ -102,13 +107,18 @@ complete tamper-proof issuance audit.
 Inventory is a versioned Codable JSON file with atomic replacement and complete
 file protection. It contains public certificate history and encrypted CA
 records. Corrupt or unknown-version stores fail closed rather than being reset.
+Read errors offer an explicit retry and retry on foreground activation. Reloads
+validate into a temporary value before replacing inventory, and a missing file
+on retry is an error rather than permission to start an empty store. Certificate
+status and filters update from a shared clock while the app is active.
 Device-bound inventory is excluded from automatic backup. Portable exports are
 explicit and contain only the CA key. Public history survives CA removal. Removal intent is persisted before deleting
 the Keychain key; interrupted removals remain visible and can be retried.
 
 Passphrase derivation and GPG recipient validation happen before the CA is
 decrypted. The OpenSSH private block is encoded into a preallocated zeroizing
-buffer and encrypted in place; plaintext is never base64-encoded for export.
+buffer and encrypted in place for passphrase exports. OpenPGP exports serialize
+an armored plaintext OpenSSH key inside Rust, then encrypt it before returning.
 
 Passphrase export: OpenSSH private-key format, bcrypt-PBKDF (64 rounds, random
 16-byte salt), AES-256-CTR, minimum 12 characters. This is OpenSSH's interoperable
@@ -117,10 +127,14 @@ GPG export: OpenSSH private key in an AES-256 OpenPGP SEIPDv1 encrypted message,
 using the recipient's valid encryption subkey. Only encrypted output reaches the
 share sheet. Temporary share files contain public certificates or ciphertext.
 
-GPG recipient parsing bounds input size, accepts one armor block, validates every
-packet before composed parsing, rejects secret/unrelated packets and supplied
-revocations, verifies bindings, checks current self-signatures/key expirations,
-and requires encryption flags. Primary/subkey fingerprints are presented and the
+OpenPGP recipient parsing bounds input size, accepts one armor block, checks
+definite-length packet framing before composed parsing, and rejects truncated
+headers/bodies, secret/unrelated packets and supplied revocations. Unrelated
+third-party user certifications are ignored after packet accounting; only
+certifications cryptographically verified under the primary can supply policy.
+User components still require a verified self-signature, subkeys require valid
+bindings, and current key/signature expirations and encryption flags are checked.
+Primary/subkey fingerprints are presented and the
 primary fingerprint is checked again on export. This offline check cannot discover
 revocations omitted from the input or establish who owns a fingerprint.
 

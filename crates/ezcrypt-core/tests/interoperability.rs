@@ -195,6 +195,28 @@ fn duplicate_identity_and_validity_boundaries() {
     assert!(b.normalized().is_err());
 }
 #[test]
+fn source_cidrs_reject_host_bits_without_widening_the_network() {
+    let mut req = request();
+    for cidr in ["192.0.2.42/24", "2001:db8::1/64", "192.0.2.1/0", "::1/0"] {
+        req.critical_options
+            .insert("source-address".into(), cidr.into());
+        assert!(req.normalized().is_err(), "accepted {cidr}");
+    }
+    for cidr in [
+        "192.0.2.0/24",
+        "192.0.2.42/32",
+        "2001:db8::/64",
+        "2001:db8::1/128",
+        "0.0.0.0/0",
+        "::/0",
+    ] {
+        req.critical_options
+            .insert("source-address".into(), cidr.into());
+        let normalized = req.normalized().unwrap();
+        assert_eq!(normalized.critical_options["source-address"], cidr);
+    }
+}
+#[test]
 fn gpg_portable_export_and_recipient_validation() {
     let home = fixture("gpg");
     fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
@@ -246,17 +268,90 @@ fn gpg_portable_export_and_recipient_validation() {
     let mut unbound = raw.clone();
     unbound.extend_from_slice(&[0xcd, 4, b'b', b'a', b'd', b'!']);
     assert!(export::recipient_info(&rearmor(&unbound)).is_err());
+    for tail in [
+        vec![0xc6],
+        vec![0xc6, 192],
+        vec![0xc6, 255],
+        vec![0xc6, 255, 0, 0, 0],
+        vec![0x98],
+        vec![0x99, 0],
+        vec![0x9a, 0, 0, 0],
+        vec![0xc6, 2, 0],
+    ] {
+        let mut truncated = raw.clone();
+        truncated.extend_from_slice(&tail);
+        assert!(
+            export::recipient_info(&rearmor(&truncated)).is_err(),
+            "accepted truncated tail {tail:?}"
+        );
+    }
     let mut trailing = raw;
     trailing.extend_from_slice(&[0, 0, 0]);
     assert!(export::recipient_info(&rearmor(&trailing)).is_err());
 
     assert!(export::recipient_info(&(armor.clone() + &armor)).is_err());
     assert!(export::recipient_info(&(armor.clone() + "junk")).is_err());
+
+    // An unrelated certification must neither reject a usable recipient nor
+    // supply its self-signature policy. Keep the certifier in a separate keyring.
+    let certifier_home = fixture("gpg-certifier");
+    fs::set_permissions(&certifier_home, fs::Permissions::from_mode(0o700)).unwrap();
+    let certifier = || {
+        let mut c = Command::new("gpg");
+        c.arg("--homedir").arg(&certifier_home).args([
+            "--batch",
+            "--yes",
+            "--pinentry-mode",
+            "loopback",
+            "--passphrase",
+            "",
+        ]);
+        c
+    };
+    if !run(certifier().args(["--with-colons", "--list-secret-keys"])).contains("fpr:") {
+        run(certifier().args([
+            "--quick-generate-key",
+            "ezcrypt certifier <certifier@example.invalid>",
+            "ed25519",
+            "cert",
+            "0",
+        ]));
+    }
+    let public_file = certifier_home.join("recipient.asc");
+    let listing = run(certifier().args(["--with-colons", "--list-secret-keys"]));
+    let certifier_fp = listing
+        .lines()
+        .find(|line| line.starts_with("fpr:"))
+        .unwrap()
+        .split(':')
+        .nth(9)
+        .unwrap();
+    fs::write(&public_file, &armor).unwrap();
+    run(certifier().arg("--import").arg(public_file));
+    run(certifier().args(["--local-user", certifier_fp, "--quick-sign-key", &fp]));
+    let certified = run(certifier().args(["--armor", "--export", &fp]));
+    assert_eq!(
+        export::recipient_info(&certified).unwrap(),
+        export::recipient_info(&armor).unwrap()
+    );
+    use pgp::{
+        composed::{Deserializable, SignedPublicKey},
+        types::Tag,
+    };
+    let (mut no_self_signature, _) = SignedPublicKey::from_string(&certified).unwrap();
+    for user in &mut no_self_signature.details.users {
+        user.signatures.retain(|sig| {
+            sig.verify_certification(&no_self_signature.primary_key, Tag::UserId, &user.id)
+                .is_err()
+        });
+    }
+    let untrusted = pgp::ser::Serialize::to_bytes(&no_self_signature).unwrap();
+    assert!(export::recipient_info(&rearmor(&untrusted)).is_err());
     for algorithm in ["ed25519", "p256", "p384", "p521"] {
         let key =
             PrivateKey::random(&mut OsRng, certificate::algorithm(algorithm).unwrap()).unwrap();
         assert!(export::gpg(&key, &armor, "wrong recipient").is_err());
-        let encrypted = export::gpg(&key, &armor, &fp).unwrap();
+        let encrypted = export::gpg(&key, &certified, &fp).unwrap();
         let file = home.join(format!("{algorithm}.gpg"));
         fs::write(&file, encrypted).unwrap();
         let restored = run(gpg().arg("--decrypt").arg(&file));

@@ -36,10 +36,18 @@ struct SigningView: View {
   @State private var source = ""
   @State private var prepared: Prepared?
   @State private var issued: CertificateRecord?
+  @State private var recovery: CertificateRecord?
   @State private var error: String?
   @State private var working = false
   @State private var importing = false
   @State private var acknowledgeDuplicate = false
+
+  private var completed: Bool {
+    issued != nil
+      || recovery.map { recovered in
+        store.inventory.certificates.contains { $0.id == recovered.id }
+      } == true
+  }
 
   private var request: SigningRequest {
     var critical: [String: String] = [:]
@@ -66,6 +74,8 @@ struct SigningView: View {
     Group {
       if let issued {
         CertificateDetail(certificate: issued)
+      } else if let recovery {
+        PendingCertificateView(certificate: recovery)
       } else {
         ScrollView {
           VStack(alignment: .leading, spacing: 20) {
@@ -78,14 +88,17 @@ struct SigningView: View {
         }.pageStyle()
       }
     }.navigationTitle(
-      issued != nil
+      completed
         ? "Certificate issued"
-        : prepared != nil ? "Review certificate" : "Sign with \(authority.name)"
+        : recovery != nil
+          ? "Save signed certificate"
+          : prepared != nil ? "Review certificate" : "Sign with \(authority.name)"
     )
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
-        Button(issued == nil ? "Cancel" : "Done") { dismiss() }.disabled(working || store.busy)
+        Button(issued == nil && recovery == nil ? "Cancel" : "Done") { dismiss() }.disabled(
+          working || store.busy)
       }
     }
     .interactiveDismissDisabled(working || store.busy)
@@ -123,9 +136,15 @@ struct SigningView: View {
           ).textInputAutocapitalization(.never).autocorrectionDisabled().inputStyle()
             .accessibilityIdentifier("principals")
         }
-        Toggle("All principals", isOn: $allPrincipals)
+        Toggle(
+          authority.purpose == .user ? "All principals (advanced)" : "All principals",
+          isOn: $allPrincipals)
         if allPrincipals {
-          Text("This certificate will not restrict which principal it can represent.").font(
+          Text(
+            authority.purpose == .user
+              ? "Requires a CA trusted in the account’s authorized_keys without a principals restriction. Servers using TrustedUserCAKeys reject certificates with no principals. Use explicit usernames for that setup."
+              : "This certificate will not restrict which hostname it can represent."
+          ).font(
             .caption
           ).foregroundStyle(.orange)
         }
@@ -224,6 +243,10 @@ struct SigningView: View {
               prepared, authorityID: authority.id, allowDuplicate: acknowledgeDuplicate)
           } catch {
             self.error = error.localizedDescription
+            if let pending = store.pendingCertificate {
+              recovery = pending
+              return
+            }
             // A failed attempt may have reserved the serial already.
             serial = (store.authority(authority.id)?.nextSerial ?? authority.nextSerial).description
             self.prepared = nil

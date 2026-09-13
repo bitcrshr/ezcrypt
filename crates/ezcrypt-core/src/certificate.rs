@@ -138,6 +138,19 @@ impl Request {
                         if prefix > if ip.is_ipv4() { 32 } else { 128 } {
                             return Err(invalid("Invalid network prefix"));
                         }
+                        let host_bits = match ip {
+                            std::net::IpAddr::V4(ip) => {
+                                u32::from(ip) & (u32::MAX.checked_shr(prefix.into()).unwrap_or(0))
+                                    != 0
+                            }
+                            std::net::IpAddr::V6(ip) => {
+                                u128::from(ip) & (u128::MAX.checked_shr(prefix.into()).unwrap_or(0))
+                                    != 0
+                            }
+                        };
+                        if host_bits {
+                            return Err(invalid("Source CIDRs must use the network address (for example, 192.0.2.0/24), or /32 for one IPv4 address and /128 for one IPv6 address"));
+                        }
                         networks.push(format!("{ip}/{prefix}"));
                     }
                     networks.sort();

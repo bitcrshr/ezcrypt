@@ -12,7 +12,7 @@ CAs, issue and inspect certificates, and export portable encrypted software keys
 - Searchable certificate inventory, duplicate/overlap warnings, and exact
   certificate redelivery without another signature.
 - Encrypted OpenSSH private-key export with a passphrase, or GPG encryption to
-  a supplied public key. Neither recovery path requires ezcrypt.
+  a supplied OpenPGP public key. Neither recovery path requires ezcrypt.
 
 ## Workspace
 
@@ -65,9 +65,16 @@ chmod 600 ca.key
 ssh-keygen -y -f ca.key
 ```
 
-The GPG path accepts one armored public certificate with a currently valid,
+The OpenPGP path accepts one armored public certificate with a currently valid,
 bound encryption subkey. The app shows primary and encryption-subkey
-fingerprints before export. It does not look up keys or revocations online.
+fingerprints before export. Unrelated third-party certifications are ignored;
+only verified self-signatures supply validity policy. It does not look up keys or
+revocations online.
+
+Use explicit usernames with servers configured through `TrustedUserCAKeys`.
+The advanced all-principals user option instead requires per-account CA trust in
+`authorized_keys` without a principals restriction. Source CIDRs must be network
+addresses (such as `192.0.2.0/24`), or `/32`/`/128` for individual addresses.
 
 Backups currently contain the CA private key, not the inventory. Software-key
 import/restore into ezcrypt, sync, RSA SSH keys, and revocation-list generation

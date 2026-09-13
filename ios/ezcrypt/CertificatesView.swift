@@ -8,7 +8,7 @@ struct CertificatesView: View {
   var filtered: [CertificateRecord] {
     store.certificates.filter {
       (query.isEmpty || $0.searchable.localizedCaseInsensitiveContains(query))
-        && (status == "All" || $0.status.rawValue == status)
+        && (status == "All" || $0.status(at: store.now).rawValue == status)
         && (purpose == "All" || $0.payload.request.purpose.title == purpose)
     }
   }
@@ -67,13 +67,14 @@ struct CertificatesView: View {
   }
 }
 struct CertificateRow: View {
+  @Environment(InventoryStore.self) private var store
   let certificate: CertificateRecord
   var body: some View {
     Panel {
       HStack(alignment: .firstTextBaseline) {
         Text(certificate.title.isEmpty ? "All principals" : certificate.title).font(.headline)
         Spacer()
-        StatusPill(status: certificate.status)
+        StatusPill(status: certificate.status(at: store.now))
       }
       Text(
         certificate.payload.request.principals.isEmpty
@@ -103,7 +104,7 @@ struct CertificateDetail: View {
           HStack {
             Eyebrow(text: "\(certificate.payload.request.purpose.title) certificate")
             Spacer()
-            StatusPill(status: certificate.status)
+            StatusPill(status: certificate.status(at: store.now))
           }
           Text(certificate.title.isEmpty ? "All principals" : certificate.title).font(
             .title.weight(.semibold))
@@ -142,6 +143,45 @@ struct CertificateDetail: View {
       }
   }
 }
+
+/// Both the signing sheet and the global recovery entry point deliver the
+/// persisted result. Retrying only writes the original certificate to disk.
+struct PendingCertificateView: View {
+  @Environment(InventoryStore.self) private var store
+  let certificate: CertificateRecord
+  @State private var error: String?
+  var body: some View {
+    if let saved = store.certificates.first(where: { $0.id == certificate.id }) {
+      CertificateDetail(certificate: saved)
+    } else {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 20) {
+          Panel {
+            Label(
+              "Certificate signed, not yet saved",
+              systemImage: "externaldrive.badge.exclamationmark"
+            )
+            .font(.headline)
+            Text(
+              "The signature is complete. Retry saving to deliver this certificate without signing again. Keep ezcrypt open until it is saved."
+            )
+            if let error { Text(error).foregroundStyle(.red) }
+            PrimaryAction(title: "Retry saving certificate", symbol: "square.and.arrow.down") {
+              do {
+                try store.savePendingCertificate()
+                error = nil
+              } catch { self.error = error.localizedDescription }
+            }.disabled(store.pendingCertificate?.id != certificate.id || store.busy)
+              .accessibilityIdentifier("retry-certificate-save")
+          }
+          RequestInspection(
+            request: certificate.payload.request,
+            subjectFingerprint: certificate.payload.subjectFingerprint)
+        }.padding(22)
+      }.pageStyle().navigationTitle("Save signed certificate")
+    }
+  }
+}
 struct RequestInspection: View {
   let request: SigningRequest
   let subjectFingerprint: String
@@ -157,6 +197,12 @@ struct RequestInspection: View {
         title: "Principals",
         value: request.allPrincipals
           ? "All principals" : request.principals.joined(separator: ", "))
+      if request.purpose == .user && request.allPrincipals {
+        Text(
+          "Not accepted by TrustedUserCAKeys. Requires per-account CA trust in authorized_keys without a principals restriction."
+        )
+        .font(.caption).foregroundStyle(.orange)
+      }
       LabeledValue(title: "Key ID", value: request.keyID.isEmpty ? "None" : request.keyID)
       LabeledValue(title: "Serial", value: request.serial)
       Divider()
