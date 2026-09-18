@@ -8,6 +8,38 @@ and the explicitly marked Simulator demo store.
 **Result after the review fixes:** 5 Rust integration tests and 8 Simulator tests passed. Strict Clippy,
 rustfmt, and swift-format lint passed. The generic iOS Release build passed.
 
+## Native Mac first cut — 2026-09-17
+
+- Native Apple silicon Debug and unsigned Release builds passed with Xcode 26.2.
+- Four native Mac tests passed: Simulator-backend exclusion, inventory reload and
+  corruption handling, native filesystem acceptance of storage/backup options,
+  and lossless OpenSSH certificate file delivery / maximum-serial round trips.
+  File-option acceptance is not proof of iOS-equivalent locked-device protection.
+- All 10 shared Swift integration/model tests passed on iPhone 17 Pro Simulator.
+  The iOS UI suite was not rerun for this change; Rust source was unchanged.
+- Opened the local Mac build and inspected the three-column empty inventory,
+  authority editor, software-custody algorithm picker, and Command-N sheet flow.
+  Screenshots: `.build/mac-review/inventory.png` and
+  `.build/mac-review/create-authority.png`. Populated signing/export flows and
+  Save-panel delivery have not yet been exercised on Mac.
+- Full Mac entitlements request an app-specific Keychain group. Local tests use
+  the separate ad-hoc entitlements without that group; they do not create keys,
+  request authentication, or prove hardware support.
+- Development signing reached a concrete prerequisite: this Mac is not yet
+  registered with the existing Apple developer team, so Xcode could not obtain a
+  Mac development profile for `app.ezcrypt.mac`. Automatic approval review blocked
+  agent-driven device registration. The user is updating Xcode and will register
+  the Mac themselves; further Xcode builds were stopped for that update.
+
+After registration, select the development team for `ezcryptMac` and run on
+**My Mac**. With disposable CAs, check hardware P-256 signing and software-CA
+wrapping/signing/export for every supported algorithm; cancel authentication and
+verify failure; relaunch and sign again; save certificates and encrypted backups
+through the native file panel; remove only the disposable keys and confirm their
+history remains. Validate the existing `WhenPasscodeSetThisDeviceOnly` /
+`userPresence` policy on the Mac, including password/Touch ID and lock behavior.
+No claim of complete Mac Secure Enclave validation is made by this first cut.
+
 ## Automated coverage
 
 `just test-core` runs five integration tests plus strict Clippy and rustfmt:

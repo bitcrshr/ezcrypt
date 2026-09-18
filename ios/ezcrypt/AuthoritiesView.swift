@@ -60,12 +60,12 @@ struct AuthoritiesView: View {
     }
     .navigationTitle("Authorities")
     .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
+      ToolbarItem(placement: .primaryAction) {
         Button("Create authority", systemImage: "plus") { sheet = .create }
           .accessibilityIdentifier("add-ca")
       }
     }
-    .sheet(item: $sheet) { route in NavigationStack { route.view }.environment(store) }
+    .sheet(item: $sheet) { route in NavigationStack { route.view }.editorSize().environment(store) }
   }
 }
 struct AuthorityRow: View {
@@ -162,12 +162,14 @@ struct CreateAuthorityView: View {
       }
     }
     .scrollDismissesKeyboard(.interactively)
-    .navigationTitle("New Authority").navigationBarTitleDisplayMode(.inline)
+    .navigationTitle("New Authority").inlineNavigationTitle()
     .actionBar {
       if let error {
         Text(error).font(.footnote).foregroundStyle(.red).frame(maxWidth: .infinity)
       }
-      PrimaryButton(title: "Create Authority", symbol: "faceid", busy: store.busy) {
+      PrimaryButton(
+        title: "Create Authority", symbol: PlatformUI.authenticationSymbol, busy: store.busy
+      ) {
         Task {
           do {
             try await store.create(
@@ -276,9 +278,10 @@ struct AuthorityDetail: View {
           }
         }
       }
-      .navigationTitle(authority.name).navigationBarTitleDisplayMode(.inline)
+      .navigationTitle(authority.name).inlineNavigationTitle()
       .toolbar(removing: .title)
-      .sheet(item: $sheet) { route in NavigationStack { route.view }.environment(store) }
+      .sheet(item: $sheet) { route in NavigationStack { route.view }.editorSize().environment(store)
+      }
       .confirmationDialog(
         "Permanently remove this CA’s private key?", isPresented: $confirmRemove,
         titleVisibility: .visible

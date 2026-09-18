@@ -22,7 +22,7 @@ struct ExportView: View {
       if let file { exported(file) } else { form }
     }
     .navigationTitle(file == nil ? "Export Backup" : "Backup Ready")
-    .navigationBarTitleDisplayMode(.inline)
+    .inlineNavigationTitle()
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
         Button(file == nil ? "Cancel" : "Done") { dismiss() }.disabled(store.busy)
@@ -58,7 +58,7 @@ struct ExportView: View {
             "Public key", text: $armor, prompt: Text("-----BEGIN PGP PUBLIC KEY BLOCK-----"),
             axis: .vertical
           )
-          .font(.footnote.monospaced()).lineLimit(3...6).textInputAutocapitalization(.never)
+          .font(.footnote.monospaced()).lineLimit(3...6).verbatimInput()
           .autocorrectionDisabled().accessibilityIdentifier("export-recipient")
           HStack {
             Button("Choose File", systemImage: "doc") { importing = true }
@@ -105,7 +105,7 @@ struct ExportView: View {
       if let error {
         Text(error).font(.footnote).foregroundStyle(.red).frame(maxWidth: .infinity)
       }
-      PrimaryButton(title: "Export", symbol: "faceid", busy: store.busy) {
+      PrimaryButton(title: "Export", symbol: PlatformUI.authenticationSymbol, busy: store.busy) {
         Task {
           do {
             file = try await store.export(
@@ -165,6 +165,9 @@ struct ExportView: View {
     }
     .sensoryFeedback(.success, trigger: file)
     .actionBar {
+      #if os(macOS)
+        SaveFileButton(file: file, title: "Save Backup…").buttonStyle(.borderedProminent)
+      #endif
       ShareLink(item: file) {
         Label("Save or Share Backup", systemImage: "square.and.arrow.up").fontWeight(.semibold)
           .foregroundStyle(Ink.onAccent).frame(maxWidth: .infinity).padding(.vertical, 4)

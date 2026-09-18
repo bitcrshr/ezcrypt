@@ -5,24 +5,35 @@ struct EzcryptApp: App {
   @State private var store = InventoryStore()
   @Environment(\.scenePhase) private var phase
   var body: some Scene {
-    WindowGroup {
-      AppView().environment(store).tint(Ink.accent)
-        .task(id: phase) {
-          guard phase == .active else { return }
-          if store.loadFailure != nil { store.reload() }
-          while !Task.isCancelled {
-            store.updateClock()
-            do { try await Task.sleep(for: .seconds(1)) } catch { return }
-          }
+    #if os(macOS)
+      Window("ezcrypt", id: "inventory") {
+        content.frame(minWidth: 900, minHeight: 600)
+      }
+      .defaultSize(width: 1120, height: 760)
+      .commands { MacCommands() }
+    #else
+      WindowGroup { content }
+    #endif
+  }
+  private var content: some View {
+    AppView().environment(store).tint(Ink.accent)
+      .task(id: phase) {
+        guard phase == .active else { return }
+        if store.loadFailure != nil { store.reload() }
+        while !Task.isCancelled {
+          store.updateClock()
+          do { try await Task.sleep(for: .seconds(1)) } catch { return }
         }
+      }
+      #if !os(macOS)
         .overlay {
           if phase != .active {
-            Color(.systemBackground).ignoresSafeArea().overlay {
+            PlatformUI.background.ignoresSafeArea().overlay {
               Image(systemName: "lock.fill").font(.largeTitle).foregroundStyle(.tertiary)
             }
           }
         }
-    }
+      #endif
   }
 }
 struct AppView: View {
@@ -42,14 +53,18 @@ struct AppView: View {
             .accessibilityIdentifier("retry-inventory")
         }
       } else {
-        TabView {
-          Tab("Authorities", systemImage: "key.horizontal") {
-            NavigationStack { AuthoritiesView() }
+        #if os(macOS)
+          MacInventoryView()
+        #else
+          TabView {
+            Tab("Authorities", systemImage: "key.horizontal") {
+              NavigationStack { AuthoritiesView() }
+            }
+            Tab("Certificates", systemImage: "checkmark.seal") {
+              NavigationStack { CertificatesView() }
+            }
           }
-          Tab("Certificates", systemImage: "checkmark.seal") {
-            NavigationStack { CertificatesView() }
-          }
-        }
+        #endif
       }
     }
     .alert(
@@ -85,7 +100,7 @@ struct AppView: View {
               Button("Done") { recovery = nil }
             }
           }
-      }.environment(store)
+      }.editorSize().environment(store)
     }
   }
 }

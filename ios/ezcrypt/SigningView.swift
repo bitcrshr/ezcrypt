@@ -90,7 +90,7 @@ struct SigningView: View {
           ? "Save Certificate"
           : prepared != nil ? "Review" : "Sign Key"
     )
-    .navigationBarTitleDisplayMode(.inline)
+    .inlineNavigationTitle()
     .sensoryFeedback(.success, trigger: completed) { _, new in new }
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
@@ -120,7 +120,7 @@ struct SigningView: View {
         TextField(
           "Public key", text: $publicKey, prompt: Text("ssh-ed25519 AAAA…"), axis: .vertical
         )
-        .font(.footnote.monospaced()).lineLimit(3...6).textInputAutocapitalization(.never)
+        .font(.footnote.monospaced()).lineLimit(3...6).verbatimInput()
         .autocorrectionDisabled().accessibilityIdentifier("subject-key")
         if let detected = SubjectKeyKind(publicKey) {
           Label {
@@ -158,7 +158,7 @@ struct SigningView: View {
             authority.purpose == .user ? "Usernames" : "Hostnames", text: $principalText,
             prompt: Text(authority.purpose == .user ? "alice, deploy" : "host.example.com")
           )
-          .font(.body.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
+          .font(.body.monospaced()).verbatimInput().autocorrectionDisabled()
           .accessibilityIdentifier("principals")
         }
         Toggle(
@@ -190,7 +190,7 @@ struct SigningView: View {
       }
       Section {
         TextField("Key ID", text: $keyID, prompt: Text("Optional")).font(.body.monospaced())
-          .textInputAutocapitalization(.never).autocorrectionDisabled()
+          .verbatimInput().autocorrectionDisabled()
           .accessibilityIdentifier("key-id")
       } header: {
         Text("Key ID")
@@ -200,7 +200,7 @@ struct SigningView: View {
       Section {
         DisclosureGroup("Advanced") {
           LabeledContent("Serial") {
-            TextField("Serial", text: $serial).keyboardType(.numberPad).font(.body.monospaced())
+            TextField("Serial", text: $serial).serialKeyboard().font(.body.monospaced())
               .multilineTextAlignment(.trailing)
           }
           if authority.purpose == .user {
@@ -218,12 +218,12 @@ struct SigningView: View {
                   }))
             }
             TextField("Force command", text: $command, axis: .vertical).font(.body.monospaced())
-              .textInputAutocapitalization(.never).autocorrectionDisabled()
+              .verbatimInput().autocorrectionDisabled()
             TextField(
               "Source addresses", text: $source, prompt: Text("Source CIDRs, comma separated"),
               axis: .vertical
             )
-            .font(.body.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled()
+            .font(.body.monospaced()).verbatimInput().autocorrectionDisabled()
           }
         }
       } footer: {
@@ -307,7 +307,10 @@ struct SigningView: View {
         ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 12))
       layout {
         if !typeSize.isAccessibilitySize { editButton }
-        PrimaryButton(title: "Sign Certificate", symbol: "faceid", busy: working || store.busy) {
+        PrimaryButton(
+          title: "Sign Certificate", symbol: PlatformUI.authenticationSymbol,
+          busy: working || store.busy
+        ) {
           working = true
           error = nil
           Task {

@@ -7,9 +7,9 @@ simulator := "iPhone 17 Pro"
 default:
     @just --list
 
-# Install Rust iOS targets and download locked dependencies locally.
+# Install Rust Apple targets and download locked dependencies locally.
 bootstrap:
-    rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+    rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
     cargo fetch --locked
 
 # Rust validation, including OpenSSH/GnuPG recovery with disposable local keys.
@@ -41,4 +41,16 @@ icon:
 # Format the shared core and Swift sources.
 fmt:
     cargo fmt --all
-    xcrun swift-format format --in-place --recursive ios/ezcrypt ios/ezcryptTests ios/ezcryptUITests ios/Tools
+    xcrun swift-format format --in-place --recursive ios/ezcrypt ios/ezcryptTests ios/ezcryptUITests ios/ezcryptMacTests ios/Tools
+
+# Native Apple silicon Mac build. Select a development team in Xcode for real key use.
+build-mac *args="":
+    xcodebuild -project {{project}} -scheme ezcryptMac -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/mac build {{args}}
+
+# Native filesystem/model checks with local signing; no Keychain entitlement or hardware operations.
+test-mac:
+    xcodebuild -project {{project}} -scheme ezcryptMac -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/mac CODE_SIGN_IDENTITY=- CODE_SIGN_ENTITLEMENTS=Mac/ezcryptMac-local.entitlements test
+
+# Compile the native Mac Release path without requiring signing credentials.
+check-mac:
+    xcodebuild -project {{project}} -scheme ezcryptMac -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/mac-release CODE_SIGNING_ALLOWED=NO build

@@ -1,6 +1,6 @@
 # ezcrypt
 
-A local iOS SSH certificate authority toolkit. Create any number of host or user
+A local iPhone, iPad, and native Mac SSH certificate authority toolkit. Create any number of host or user
 CAs, issue and inspect certificates, and export portable encrypted software keys.
 
 - **Hardware CAs:** P-256 keys generated in the Secure Enclave, non-exportable.
@@ -21,7 +21,7 @@ CAs, issue and inspect certificates, and export portable encrypted software keys
 ## Workspace
 
 ```
-ios/                 SwiftUI app, Xcode project, Apple bridge, Swift/UI tests
+ios/                 Shared SwiftUI app, iOS/Mac targets, Apple bridge, Swift/UI tests
 crates/ezcrypt-core/  Portable Rust certificate, custody, and export core
 docs/                Custody/format design and validation record
 .scratch/            Ignored working notes
@@ -31,7 +31,7 @@ docs/                Custody/format design and validation record
 Requires macOS, Xcode 26+, rustup, and Just. Rust 1.94.0 is pinned in
 `rust-toolchain.toml`. OpenSSH and GnuPG are required for core
 interoperability tests. iOS deployment target is 26.0. Builds currently target
-Apple Silicon simulators and arm64 devices.
+Apple silicon simulators, arm64 iOS devices, and Apple silicon Macs on macOS 26+.
 
 ```
 just bootstrap
@@ -50,6 +50,42 @@ Keychain keys and an explicit **SIMULATOR · TEST KEYS** banner. A normal Simula
 launch refuses hardware operations; device/Release builds cannot use the demo
 backend. Test hosts use the equally restricted `EZCRYPT_TEST_MODE=1` switch.
 No fixture CA or plaintext private key ships with the app.
+
+## Native Mac app
+
+Open `ios/ezcrypt.xcodeproj`, choose the **ezcryptMac** scheme and **My Mac**.
+Select your Apple development team in Signing & Capabilities. The Mac target
+requires a development profile authorizing its app-specific Keychain access group;
+the Mac must be registered with that team. No team or signing identity is committed.
+
+```sh
+just build-mac DEVELOPMENT_TEAM=YOUR_TEAM_ID
+just test-mac
+just check-mac
+```
+
+The Mac app shares its Rust core, models, inventory store, cryptographic bridge,
+detail screens, and creation/signing/export forms with iOS. It adds a resizable
+three-column browser, search and certificate filters, File → New Authority (⌘N),
+Mac clipboard handling, and native Save panels for certificates and encrypted backups.
+It has a single inventory window and uses App Sandbox with user-selected file access.
+
+`test-mac` uses local ad-hoc signing and `ezcryptMac-local.entitlements` for
+filesystem/model tests and UI inspection only. That build lacks the Keychain
+entitlement needed for real key operations. `build-mac` uses the full entitlements;
+`check-mac` compiles Release without signing. Neither local signing nor a successful
+build proves Secure Enclave or authentication behavior. The Simulator software-key
+backend remains unavailable on Mac, including Debug builds.
+
+Inventories are currently separate on every device. Mac key creation, lookup, and
+delete explicitly select the data-protection Keychain, preserving hardware-only
+key custody and the existing user-presence policy. Interactive Mac hardware
+validation is still required; see [validation](docs/validation.md).
+
+The next phases are iCloud inventory sync **without CA private keys**, followed by
+explicit authorization of another device to sign for a software CA. Neither is
+implemented in this phase. The local JSON currently includes device-wrapped
+software-key envelopes and must not simply be uploaded as the future sync format.
 
 ## Portable recovery
 

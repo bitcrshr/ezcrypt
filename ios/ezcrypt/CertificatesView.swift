@@ -64,7 +64,7 @@ struct CertificatesView: View {
     .navigationTitle("Certificates")
     .searchable(text: $query, prompt: "Principal, key ID, serial, fingerprint")
     .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
+      ToolbarItem(placement: .primaryAction) {
         Menu {
           Picker("Status", selection: $status) {
             Text("Any Status").tag(CertificateStatus?.none)
@@ -143,6 +143,9 @@ struct CertificateDetail: View {
           .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
           HStack(spacing: 12) {
             if let file {
+              #if os(macOS)
+                SaveFileButton(file: file, title: "Save Certificate…")
+              #endif
               ShareLink(item: file) {
                 Label("Share", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
               }.accessibilityIdentifier("share-certificate")
@@ -173,7 +176,7 @@ struct CertificateDetail: View {
         }
       }
     }
-    .navigationTitle("Certificate").navigationBarTitleDisplayMode(.inline)
+    .navigationTitle("Certificate").inlineNavigationTitle()
     .task {
       do { file = try store.certificateFile(certificate) } catch {
         store.failure = error.localizedDescription
@@ -205,7 +208,7 @@ struct PendingCertificateView: View {
           request: certificate.payload.request,
           subjectFingerprint: certificate.payload.subjectFingerprint)
       }
-      .navigationTitle("Save Certificate").navigationBarTitleDisplayMode(.inline)
+      .navigationTitle("Save Certificate").inlineNavigationTitle()
       .actionBar {
         if let error {
           Text(error).font(.footnote).foregroundStyle(.red).frame(maxWidth: .infinity)

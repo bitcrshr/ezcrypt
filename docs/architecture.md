@@ -23,9 +23,28 @@ session. Real device keys use WhenPasscodeSetThisDeviceOnly accessibility. Creat
 authentication. Authentication cancellation propagates as failure.
 
 The Debug Simulator backend uses native software SecKey objects solely to test
-the same ECDH/signature callback paths. It is compiled out for devices and Release,
+the same ECDH/signature callback paths. It is compiled out for physical iOS devices, all Mac builds, and Release,
 requires an explicit switch, has distinct Keychain tags and inventory location,
 and is labeled on screen. It does not prove Secure Enclave behavior.
+
+## Native Mac target
+
+`ezcryptMac` compiles the same Swift source directory and the Rust core for
+`aarch64-apple-darwin`. Only the navigation shell and small platform adapters are
+Mac-specific. A single SwiftUI `Window` owns one shared inventory store; normal
+Mac focus changes do not cover the window with the iOS app-switcher privacy overlay.
+Sensitive key operations still authenticate through the shared cryptographic actor.
+
+Mac SecItem create/load/delete operations explicitly select the data-protection
+Keychain. The signed target requests only its own app-specific Keychain group,
+App Sandbox, and user-selected read/write file access. There are no iCloud or
+network entitlements. The separate local-test entitlement file omits Keychain
+access and cannot qualify hardware operation support.
+
+The local inventory schema is unchanged. Future public inventory synchronization
+must separate public records from device-wrapped software-key envelopes; copying
+this entire JSON file into iCloud is not the intended design. Cross-device signing
+authorization is a later phase, with no protocol or trust changes in this target.
 
 ## Envelope v1
 
@@ -110,7 +129,9 @@ complete tamper-proof issuance audit.
 ## Storage and backups
 
 Inventory is a versioned Codable JSON file with atomic replacement and complete
-file protection. It contains public certificate history and encrypted CA
+file-protection options on iOS. The Mac inventory is stored inside its app sandbox;
+acceptance of those Foundation file options does not establish identical iOS
+locked-device protection semantics. It contains public certificate history and encrypted CA
 records. Corrupt or unknown-version stores fail closed rather than being reset.
 Read errors offer an explicit retry and retry on foreground activation. Reloads
 validate into a temporary value before replacing inventory, and a missing file

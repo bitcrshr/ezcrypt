@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LocalAuthentication
 import Security
@@ -132,6 +133,9 @@ actor CryptoEngine {
       kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
       kSecAttrKeySizeInBits as String: 256,
     ]
+    #if os(macOS)
+      attrs[kSecUseDataProtectionKeychain as String] = true
+    #endif
     var privateAttrs: [String: Any] = [
       kSecAttrIsPermanent as String: true, kSecAttrApplicationTag as String: tag(id),
     ]
@@ -143,6 +147,11 @@ actor CryptoEngine {
           "Secure Enclave requires an iPhone or iPad. Launch a Debug Simulator session with --demo for isolated test keys."
         )
       #else
+        guard SecureEnclave.isAvailable else {
+          throw AppFailure(
+            "Secure Enclave is unavailable on this device. Hardware-backed key storage is required."
+          )
+        }
         guard
           let access = SecAccessControlCreateWithFlags(
             nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
@@ -167,11 +176,14 @@ actor CryptoEngine {
   }
   private func load(_ id: UUID, reason: String) throws -> HardwareContext {
     let auth = context(reason)
-    let query: [String: Any] = [
+    var query: [String: Any] = [
       kSecClass as String: kSecClassKey, kSecAttrApplicationTag as String: tag(id),
       kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom, kSecReturnRef as String: true,
       kSecUseAuthenticationContext as String: auth,
     ]
+    #if os(macOS)
+      query[kSecUseDataProtectionKeychain as String] = true
+    #endif
     var result: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
     guard status == errSecSuccess, let result else {
@@ -269,9 +281,13 @@ actor CryptoEngine {
       ], secret: password, context: context)
   }
   func removeKey(_ id: UUID) throws {
-    let status = SecItemDelete(
-      [kSecClass as String: kSecClassKey, kSecAttrApplicationTag as String: tag(id)] as CFDictionary
-    )
+    var query: [String: Any] = [
+      kSecClass as String: kSecClassKey, kSecAttrApplicationTag as String: tag(id),
+    ]
+    #if os(macOS)
+      query[kSecUseDataProtectionKeychain as String] = true
+    #endif
+    let status = SecItemDelete(query as CFDictionary)
     guard status == errSecSuccess || status == errSecItemNotFound else {
       throw AppFailure("Cannot remove key (Keychain \(status))")
     }

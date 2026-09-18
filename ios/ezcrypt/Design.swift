@@ -9,12 +9,26 @@ enum Ink {
 }
 extension Color {
   fileprivate init(light: UInt32, dark: UInt32) {
-    func color(_ hex: UInt32) -> UIColor {
-      UIColor(
-        red: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
-        blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
-    }
-    self.init(uiColor: UIColor { $0.userInterfaceStyle == .dark ? color(dark) : color(light) })
+    #if os(macOS)
+      func color(_ hex: UInt32) -> NSColor {
+        NSColor(
+          srgbRed: CGFloat(hex >> 16 & 0xFF) / 255,
+          green: CGFloat(hex >> 8 & 0xFF) / 255,
+          blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+      }
+      self.init(
+        nsColor: NSColor(name: nil) { appearance in
+          appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? color(dark) : color(light)
+        })
+    #else
+      func color(_ hex: UInt32) -> UIColor {
+        UIColor(
+          red: CGFloat(hex >> 16 & 0xFF) / 255,
+          green: CGFloat(hex >> 8 & 0xFF) / 255,
+          blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+      }
+      self.init(uiColor: UIColor { $0.userInterfaceStyle == .dark ? color(dark) : color(light) })
+    #endif
   }
 }
 
@@ -200,10 +214,17 @@ struct PrimaryButton: View {
 }
 extension View {
   /// Pins the screen's main action to the bottom edge, always within reach.
-  func actionBar<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-    safeAreaBar(edge: .bottom) {
-      VStack(spacing: 10) { content() }.padding(.horizontal, 20).padding(.bottom, 8)
-    }
+  @ViewBuilder func actionBar<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    #if os(macOS)
+      safeAreaInset(edge: .bottom, spacing: 0) {
+        VStack(spacing: 10) { content() }.padding(16)
+          .frame(maxWidth: .infinity).background(.bar)
+      }
+    #else
+      safeAreaBar(edge: .bottom) {
+        VStack(spacing: 10) { content() }.padding(.horizontal, 20).padding(.bottom, 8)
+      }
+    #endif
   }
 }
 
@@ -226,7 +247,7 @@ struct CopyButton: View {
   var body: some View {
     Button {
       do {
-        UIPasteboard.general.string = try value()
+        PlatformUI.copy(try value())
         copied = true
       } catch { onError(error) }
     } label: {
