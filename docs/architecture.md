@@ -126,6 +126,23 @@ same operation. A crash between hardware signing and the final disk write can lo
 undelivered certificate; its serial remains reserved. The app does not claim a
 complete tamper-proof issuance audit.
 
+## Inventory lifecycle
+
+CA archival is reversible local inventory state (`inventoryArchived`). It preserves
+key references, encrypted envelopes, issued history, and the serial allocator.
+The issuance gate checks archival again before reserving a serial or invoking
+cryptography. Existing records use `archived` to mean key removal; that field keeps
+its old meaning and cannot be reversed by the restore action. Pending removals
+stay visible for retry.
+
+Certificates have an optional `archived` flag. Both new fields decode as absent
+for existing version-1 inventories. Visibility filters affect browsing only:
+archived certificates remain in duplicate checks. Permanent certificate deletion
+removes the record and its duplicate-warning history, with confirmation, without
+touching the CA's key or serial counter. All lifecycle changes use the existing
+atomic persistence and busy/pending-result guards. None of these actions revoke
+issued certificates or erase exported copies.
+
 ## Storage and backups
 
 Inventory is a versioned Codable JSON file with atomic replacement and complete

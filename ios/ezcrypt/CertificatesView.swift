@@ -5,9 +5,11 @@ struct CertificatesView: View {
   @State private var query = ""
   @State private var status: CertificateStatus?
   @State private var purpose: Purpose?
+  @State private var visibility = InventoryVisibility.active
   var filtered: [CertificateRecord] {
     store.certificates.filter {
-      (query.isEmpty || $0.searchable.localizedCaseInsensitiveContains(query))
+      visibility.includes(archived: $0.isArchived)
+        && (query.isEmpty || $0.searchable.localizedCaseInsensitiveContains(query))
         && (status == nil || $0.status(at: store.now) == status)
         && (purpose == nil || $0.payload.request.purpose == purpose)
     }
@@ -54,6 +56,7 @@ struct CertificatesView: View {
             Button("Clear Filters") {
               status = nil
               purpose = nil
+              visibility = .all
             }
           }
         } else {
@@ -66,6 +69,9 @@ struct CertificatesView: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Menu {
+          Picker("Inventory", selection: $visibility) {
+            ForEach(InventoryVisibility.allCases) { Text($0.rawValue).tag($0) }
+          }
           Picker("Status", selection: $status) {
             Text("Any Status").tag(CertificateStatus?.none)
             ForEach(CertificateStatus.allCases, id: \.self) {
@@ -79,7 +85,7 @@ struct CertificatesView: View {
         } label: {
           Label(
             "Filter",
-            systemImage: status == nil && purpose == nil
+            systemImage: status == nil && purpose == nil && visibility == .active
               ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
         }
       }
@@ -114,6 +120,7 @@ struct CertificateRow: View {
         [
           request.allPrincipals ? "any principal" : request.principals.joined(separator: ", "),
           showsAuthority ? certificate.authorityName : nil, "#\(request.serial)",
+          certificate.isArchived ? "Archived" : nil,
         ].compactMap { $0 }.joined(separator: " · ")
       )
       .font(.subheadline).foregroundStyle(.secondary).lineLimit(
@@ -126,10 +133,13 @@ struct CertificateRow: View {
 struct CertificateDetail: View {
   @Environment(InventoryStore.self) private var store
   let certificate: CertificateRecord
+  @Environment(\.dismiss) private var dismiss
+  @State private var confirmDelete = false
   @State private var file: URL?
   var body: some View {
-    let request = certificate.payload.request
-    let status = certificate.status(at: store.now)
+    let current = store.certificates.first { $0.id == certificate.id } ?? certificate
+    let request = current.payload.request
+    let status = current.status(at: store.now)
     List {
       Section {
         VStack(spacing: 10) {
@@ -169,6 +179,28 @@ struct CertificateDetail: View {
       } header: {
         Text("Authority")
       }
+      if store.certificates.contains(where: { $0.id == certificate.id }) {
+        Section {
+          Button(
+            current.isArchived ? "Restore Certificate" : "Archive Certificate",
+            systemImage: current.isArchived ? "arrow.uturn.backward" : "archivebox"
+          ) {
+            do {
+              try store.setCertificateArchived(certificate.id, archived: !current.isArchived)
+            } catch { store.failure = error.localizedDescription }
+          }
+          .accessibilityIdentifier("archive-certificate")
+          Button("Delete Certificate…", role: .destructive) { confirmDelete = true }
+            .accessibilityIdentifier("delete-certificate")
+        } header: {
+          Text("Inventory")
+        } footer: {
+          Text(
+            "Archiving hides this record from the active inventory. It does not revoke the certificate."
+          )
+        }
+        .disabled(store.busy || store.pendingCertificate != nil)
+      }
       Section {
         DisclosureGroup("OpenSSH Certificate") {
           Text(certificate.payload.certificate).font(.caption.monospaced()).textSelection(
@@ -177,6 +209,19 @@ struct CertificateDetail: View {
       }
     }
     .navigationTitle("Certificate").inlineNavigationTitle()
+    .alert("Delete this certificate from the inventory?", isPresented: $confirmDelete) {
+      Button("Cancel", role: .cancel) {}
+      Button("Delete Certificate", role: .destructive) {
+        do {
+          try store.deleteCertificate(certificate.id)
+          dismiss()
+        } catch { store.failure = error.localizedDescription }
+      }
+    } message: {
+      Text(
+        "Deletes this record and its duplicate-warning history permanently. Saved copies remain valid; this does not revoke the certificate or reset CA serials."
+      )
+    }
     .task {
       do { file = try store.certificateFile(certificate) } catch {
         store.failure = error.localizedDescription

@@ -87,6 +87,22 @@ explicit authorization of another device to sign for a software CA. Neither is
 implemented in this phase. The local JSON currently includes device-wrapped
 software-key envelopes and must not simply be uploaded as the future sync format.
 
+## Organizing the inventory
+
+Authority and certificate lists have an **Active / Archived / All** inventory
+filter on iPhone, iPad, and Mac. Open a record for its archive/restore actions.
+
+- **Archive Authority** keeps the private key and issued history, hides the CA
+  from the active list, and prevents new signing until **Restore Authority**.
+  **Remove Private Key** remains a separate permanent operation. An authority
+  whose key was removed remains viewable in Archived but cannot be restored.
+- **Archive Certificate** is reversible and keeps the record in duplicate checks.
+- **Delete Certificate** permanently removes its inventory record after
+  confirmation. It no longer contributes to duplicate warnings. CA serial
+  counters are never reset or reused by archiving or deleting records.
+
+These actions do not revoke certificates or remove copies already saved elsewhere.
+
 ## Portable recovery
 
 Passphrase exports are ordinary encrypted OpenSSH private-key files:

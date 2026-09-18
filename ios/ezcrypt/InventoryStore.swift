@@ -48,7 +48,13 @@ final class InventoryStore {
     } catch { loadFailure = error.localizedDescription }
   }
   var authorities: [Authority] {
-    inventory.authorities.filter { !$0.archived || $0.keyRemovalPending == true }.sorted {
+    visibleAuthorities(.active)
+  }
+  func visibleAuthorities(_ visibility: InventoryVisibility) -> [Authority] {
+    inventory.authorities.filter {
+      visibility.includes(archived: $0.isArchived)
+        || (visibility == .active && $0.keyRemovalPending == true)
+    }.sorted {
       $0.name.localizedStandardCompare($1.name) == .orderedAscending
     }
   }
@@ -77,6 +83,38 @@ final class InventoryStore {
       throw AppFailure("Finish the current operation before continuing.")
     }
     busy = true
+  }
+  func setAuthorityArchived(_ id: UUID, archived: Bool) throws {
+    try begin()
+    defer { busy = false }
+    var next = inventory
+    guard let index = next.authorities.firstIndex(where: { $0.id == id }) else {
+      throw AppFailure("CA is no longer available.")
+    }
+    guard !next.authorities[index].archived, next.authorities[index].keyRemovalPending != true
+    else {
+      throw AppFailure("A CA whose private key was removed cannot be restored.")
+    }
+    next.authorities[index].inventoryArchived = archived
+    try persist(next)
+  }
+  func setCertificateArchived(_ id: UUID, archived: Bool) throws {
+    try begin()
+    defer { busy = false }
+    var next = inventory
+    guard let index = next.certificates.firstIndex(where: { $0.id == id }) else {
+      throw AppFailure("Certificate is no longer in the inventory.")
+    }
+    next.certificates[index].archived = archived
+    try persist(next)
+  }
+  func deleteCertificate(_ id: UUID) throws {
+    try begin()
+    defer { busy = false }
+    var next = inventory
+    next.certificates.removeAll { $0.id == id }
+    // Never change the authority's serial allocator when removing its history.
+    try persist(next)
   }
   func create(name: String, purpose: Purpose, custody: Custody, algorithm: KeyAlgorithm)
     async throws
@@ -116,7 +154,7 @@ final class InventoryStore {
   {
     try begin()
     defer { busy = false }
-    guard var authority = authority(authorityID), !authority.archived else {
+    guard var authority = authority(authorityID), !authority.isArchived else {
       throw AppFailure("This CA is no longer available.")
     }
     guard !authority.exhausted, let serial = UInt64(prepared.request.serial),

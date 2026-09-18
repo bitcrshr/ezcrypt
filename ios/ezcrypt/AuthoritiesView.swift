@@ -22,9 +22,10 @@ private enum AuthoritySheet: Identifiable {
 struct AuthoritiesView: View {
   @Environment(InventoryStore.self) private var store
   @State private var sheet: AuthoritySheet?
+  @State private var visibility = InventoryVisibility.active
   var body: some View {
     List {
-      ForEach(store.authorities) { authority in
+      ForEach(store.visibleAuthorities(visibility)) { authority in
         NavigationLink {
           AuthorityDetail(authorityID: authority.id)
         } label: {
@@ -33,13 +34,13 @@ struct AuthoritiesView: View {
             issued: store.certificates.filter { $0.authorityID == authority.id }.count)
         }
         .swipeActions(edge: .leading) {
-          if !authority.archived {
+          if !authority.isArchived {
             Button("Sign Key", systemImage: "signature") { sheet = .sign(authority) }.tint(
               Ink.accent)
           }
         }
         .contextMenu {
-          if !authority.archived {
+          if !authority.isArchived {
             Button("Sign Key…", systemImage: "signature") { sheet = .sign(authority) }
           }
           CopyButton("Copy Public Key", value: authority.publicKey)
@@ -47,13 +48,21 @@ struct AuthoritiesView: View {
       }
     }
     .overlay {
-      if store.authorities.isEmpty {
+      if store.visibleAuthorities(visibility).isEmpty {
         ContentUnavailableView {
-          Label("No Authorities", systemImage: "key.horizontal")
+          Label(
+            visibility == .archived ? "No Archived Authorities" : "No Authorities",
+            systemImage: "key.horizontal")
         } description: {
-          Text("Create a user or host CA to start signing SSH keys.")
+          Text(
+            visibility == .archived
+              ? "Archived authorities appear here. Restore an authority to sign with it again."
+              : "Create a user or host CA to start signing SSH keys.")
         } actions: {
-          Button("Create Authority") { sheet = .create }.buttonStyle(.glassProminent)
+          Button("Create Authority") {
+            visibility = .active
+            sheet = .create
+          }.buttonStyle(.glassProminent)
             .accessibilityIdentifier("create-first-ca")
         }
       }
@@ -61,8 +70,18 @@ struct AuthoritiesView: View {
     .navigationTitle("Authorities")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        Button("Create authority", systemImage: "plus") { sheet = .create }
-          .accessibilityIdentifier("add-ca")
+        Menu("Show", systemImage: "line.3.horizontal.decrease") {
+          Picker("Inventory", selection: $visibility) {
+            ForEach(InventoryVisibility.allCases) { Text($0.rawValue).tag($0) }
+          }
+        }.accessibilityIdentifier("authority-visibility")
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button("Create authority", systemImage: "plus") {
+          visibility = .active
+          sheet = .create
+        }
+        .accessibilityIdentifier("add-ca")
       }
     }
     .sheet(item: $sheet) { route in NavigationStack { route.view }.editorSize().environment(store) }
@@ -82,6 +101,14 @@ struct AuthorityRow: View {
       SealTile(fingerprint: authority.fingerprint)
       VStack(alignment: .leading, spacing: 3) {
         Text(authority.name).font(.headline)
+        if authority.isArchived {
+          Label(
+            authority.keyRemovalPending == true
+              ? "Removal pending" : authority.archived ? "Key removed" : "Archived",
+            systemImage: "archivebox"
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
         Text(
           authority.keyRemovalPending == true
             ? "Key removal unfinished" : "\(authority.purpose.title) · \(authority.custody.title)"
@@ -209,7 +236,7 @@ struct AuthorityDetail: View {
               )
               .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
-            if !authority.archived {
+            if !authority.isArchived {
               PrimaryButton(title: "Sign Key", symbol: "signature") { sheet = .sign(authority) }
                 .accessibilityIdentifier("sign-key")
             }
@@ -271,6 +298,36 @@ struct AuthorityDetail: View {
             Spacer()
             if !certificates.isEmpty { Text(certificates.count, format: .number) }
           }
+        }
+        Section {
+          if authority.archived {
+            Label(
+              authority.keyRemovalPending == true
+                ? "Private key removal unfinished" : "Private key removed", systemImage: "key.slash"
+            )
+          } else {
+            Button(
+              authority.isArchived ? "Restore Authority" : "Archive Authority",
+              systemImage: authority.isArchived ? "arrow.uturn.backward" : "archivebox"
+            ) {
+              do {
+                try store.setAuthorityArchived(authority.id, archived: !authority.isArchived)
+                #if !os(macOS)
+                  dismiss()
+                #endif
+              } catch { store.failure = error.localizedDescription }
+            }
+            .disabled(store.busy || store.pendingCertificate != nil)
+            .accessibilityIdentifier("archive-authority")
+          }
+        } footer: {
+          Text(
+            authority.keyRemovalPending == true
+              ? "Retry key removal to finish. This authority cannot sign or be restored."
+              : authority.archived
+                ? "Certificate history remains available. The removed private key cannot be restored here."
+                : "Archiving keeps the private key and certificate history, and disables new signing until restored. Issued certificates are not revoked."
+          )
         }
         if !authority.archived {
           Section {

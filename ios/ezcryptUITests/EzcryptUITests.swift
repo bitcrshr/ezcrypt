@@ -58,6 +58,60 @@ final class EzcryptUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["workstation"].firstMatch.waitForExistence(timeout: 5))
     capture(app, name: "Certificates")
   }
+  @MainActor func testArchiveRestoreAndDeleteInventory() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo"]
+    app.launch()
+    XCTAssertTrue(app.buttons["add-ca"].waitForExistence(timeout: 10))
+    let name = "Archive \(UUID().uuidString.prefix(6))"
+    app.buttons["add-ca"].tap()
+    let nameField = app.textFields["ca-name"]
+    XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+    nameField.tap()
+    nameField.typeText(name + "\n")
+    app.buttons["confirm-create-ca"].tap()
+    XCTAssertTrue(nameField.waitForNonExistence(timeout: 15))
+    try XCTUnwrap(row(name, in: app)).tap()
+    app.buttons["sign-key"].tap()
+    let key = app.textFields["subject-key"]
+    XCTAssertTrue(key.waitForExistence(timeout: 5))
+    key.tap()
+    key.typeText(
+      "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIFhmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmAAAAEHNzaDplemNyeXB0LXRlc3Q="
+    )
+    let principals = app.textFields["principals"]
+    reveal(principals, in: app)
+    principals.tap()
+    principals.typeText("alice\n")
+    app.buttons["review-certificate"].tap()
+    XCTAssertTrue(app.buttons["confirm-sign"].waitForExistence(timeout: 5))
+    app.buttons["confirm-sign"].tap()
+    XCTAssertTrue(app.buttons["share-certificate"].waitForExistence(timeout: 15))
+    reveal(app.buttons["archive-certificate"], in: app)
+    app.buttons["archive-certificate"].tap()
+    XCTAssertEqual(app.buttons["archive-certificate"].label, "Restore Certificate")
+    capture(app, name: "Archived certificate")
+    app.buttons["archive-certificate"].tap()
+    XCTAssertEqual(app.buttons["archive-certificate"].label, "Archive Certificate")
+    app.buttons["delete-certificate"].tap()
+    capture(app, name: "Delete certificate confirmation")
+    app.buttons["Cancel"].tap()
+    XCTAssertTrue(app.buttons["delete-certificate"].exists)
+    app.buttons["delete-certificate"].tap()
+    app.buttons["Delete Certificate"].tap()
+    XCTAssertTrue(app.buttons["sign-key"].waitForExistence(timeout: 5))
+    reveal(app.buttons["archive-authority"], in: app)
+    app.buttons["archive-authority"].tap()
+    XCTAssertTrue(app.buttons["authority-visibility"].waitForExistence(timeout: 5))
+    app.buttons["authority-visibility"].tap()
+    app.buttons["Archived"].tap()
+    try XCTUnwrap(row(name, in: app)).tap()
+    reveal(app.buttons["archive-authority"], in: app)
+    XCTAssertEqual(app.buttons["archive-authority"].label, "Restore Authority")
+    capture(app, name: "Archived authority")
+    app.buttons["archive-authority"].tap()
+    XCTAssertTrue(app.buttons["authority-visibility"].waitForExistence(timeout: 5))
+  }
   @MainActor private func fillSigning(
     _ app: XCUIApplication, publicKey: String, capturing: Bool = false
   ) {

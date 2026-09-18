@@ -6,6 +6,10 @@
 	objectVersion = 71;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B90000000000000000000001 /* InventoryLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000002 /* InventoryLifecycleTests.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		E00000000000000000000021 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -31,6 +35,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B90000000000000000000002 /* InventoryLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ezcryptTests/InventoryLifecycleTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000001 /* ezcrypt.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = ezcrypt.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000002 /* ezcryptTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ezcryptTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000003 /* ezcryptUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ezcryptUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -87,6 +92,7 @@
 		A00000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
+				B90000000000000000000002 /* InventoryLifecycleTests.swift */,
 				A00000000000000000000002 /* ezcrypt */,
 				A00000000000000000000003 /* ezcryptTests */,
 				A00000000000000000000006 /* ezcryptMacTests */,
@@ -350,6 +356,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B90000000000000000000001 /* InventoryLifecycleTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

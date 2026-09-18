@@ -38,6 +38,10 @@ struct Authority: Codable, Identifiable, Hashable {
   var exhausted: Bool = false
   var archived: Bool = false
   var keyRemovalPending: Bool?
+  // `archived` in older inventories means the private key was removed.
+  // Keep reversible inventory archival separate so old records cannot regain signing access.
+  var inventoryArchived: Bool?
+  var isArchived: Bool { archived || inventoryArchived == true }
 }
 struct SigningRequest: Codable, Hashable {
   enum CodingKeys: String, CodingKey {
@@ -79,6 +83,8 @@ struct CertificateRecord: Codable, Identifiable, Hashable {
   var authorityName: String
   var issuedAt: Date
   var payload: IssuedPayload
+  var archived: Bool?
+  var isArchived: Bool { archived == true }
   var title: String {
     payload.request.keyID.isEmpty
       ? payload.request.principals.joined(separator: ", ") : payload.request.keyID
@@ -135,4 +141,15 @@ extension Data {
 }
 extension Encodable {
   func object() throws -> Any { try JSONEncoder().encode(self).object() }
+}
+
+/// Visibility affects browsing only, never issuance or duplicate detection.
+enum InventoryVisibility: String, CaseIterable, Identifiable {
+  case active = "Active"
+  case archived = "Archived"
+  case all = "All"
+  var id: Self { self }
+  func includes(archived: Bool) -> Bool {
+    self == .all || (self == .archived) == archived
+  }
 }

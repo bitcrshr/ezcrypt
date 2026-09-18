@@ -17,19 +17,28 @@
     @State private var status: CertificateStatus?
     @State private var purpose: Purpose?
     @State private var creating = false
+    @State private var authorityVisibility = InventoryVisibility.active
+    @State private var certificateVisibility = InventoryVisibility.active
 
     private var authorities: [Authority] {
-      store.authorities.filter {
+      store.visibleAuthorities(authorityVisibility).filter {
         query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
           || $0.fingerprint.localizedCaseInsensitiveContains(query)
       }
     }
     private var certificates: [CertificateRecord] {
       store.certificates.filter {
-        (query.isEmpty || $0.searchable.localizedCaseInsensitiveContains(query))
+        certificateVisibility.includes(archived: $0.isArchived)
+          && (query.isEmpty || $0.searchable.localizedCaseInsensitiveContains(query))
           && (status == nil || $0.status(at: store.now) == status)
           && (purpose == nil || $0.payload.request.purpose == purpose)
       }
+    }
+    private func startCreating() {
+      section = .authorities
+      authorityVisibility = .active
+      query = ""
+      creating = true
     }
     private var canCreate: Bool { !store.busy && store.pendingCertificate == nil }
     var body: some View {
@@ -60,6 +69,9 @@
             }
             .toolbar {
               Menu("Filter", systemImage: "line.3.horizontal.decrease") {
+                Picker("Inventory", selection: $certificateVisibility) {
+                  ForEach(InventoryVisibility.allCases) { Text($0.rawValue).tag($0) }
+                }
                 Picker("Status", selection: $status) {
                   Text("Any Status").tag(CertificateStatus?.none)
                   ForEach(CertificateStatus.allCases, id: \.self) {
@@ -81,20 +93,27 @@
               .tag(authority.id)
               .contextMenu { CopyButton("Copy Public Key", value: authority.publicKey) }
             }
+            .toolbar {
+              Menu("Show", systemImage: "line.3.horizontal.decrease") {
+                Picker("Inventory", selection: $authorityVisibility) {
+                  ForEach(InventoryVisibility.allCases) { Text($0.rawValue).tag($0) }
+                }
+              }.accessibilityIdentifier("authority-visibility")
+            }
             .overlay {
               if authorities.isEmpty {
                 ContentUnavailableView {
                   Label(
-                    store.authorities.isEmpty ? "No Authorities" : "No Matches",
+                    store.inventory.authorities.isEmpty ? "No Authorities" : "No Matches",
                     systemImage: "key.horizontal")
                 } description: {
                   Text(
-                    store.authorities.isEmpty
+                    store.inventory.authorities.isEmpty
                       ? "Create an authority to sign SSH keys on this Mac."
                       : "Try another name or fingerprint.")
                 } actions: {
-                  if store.authorities.isEmpty {
-                    Button("Create Authority") { creating = true }.buttonStyle(.borderedProminent)
+                  if store.inventory.authorities.isEmpty {
+                    Button("Create Authority") { startCreating() }.buttonStyle(.borderedProminent)
                   }
                 }
               }
@@ -114,7 +133,7 @@
           {
             CertificateDetail(certificate: certificate).id(certificate.id)
           } else if section != .certificates, let authorityID,
-            store.authorities.contains(where: { $0.id == authorityID })
+            store.inventory.authorities.contains(where: { $0.id == authorityID })
           {
             AuthorityDetail(authorityID: authorityID).id(authorityID)
           } else {
@@ -128,10 +147,10 @@
         .frame(minWidth: 360)
       }
       .navigationSplitViewStyle(.balanced)
-      .focusedSceneValue(\.createAuthority, canCreate ? { creating = true } : nil)
+      .focusedSceneValue(\.createAuthority, canCreate ? { startCreating() } : nil)
       .toolbar {
         ToolbarItem(placement: .primaryAction) {
-          Button("New Authority", systemImage: "plus") { creating = true }
+          Button("New Authority", systemImage: "plus") { startCreating() }
             .disabled(!canCreate)
             .accessibilityIdentifier("add-ca")
         }

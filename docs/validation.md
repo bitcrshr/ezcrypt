@@ -8,6 +8,29 @@ and the explicitly marked Simulator demo store.
 **Result after the review fixes:** 5 Rust integration tests and 8 Simulator tests passed. Strict Clippy,
 rustfmt, and swift-format lint passed. The generic iOS Release build passed.
 
+## Inventory archive/delete — 2026-09-17
+
+Validated with the updated Xcode 27.0 toolchain and the existing iOS 26.2 iPhone
+17 Pro Simulator (explicit destination ID, since the default runtime changed).
+
+- 8 Mac tests passed, including 4 shared inventory lifecycle tests.
+- 14 iOS integration/model tests passed.
+- The new Simulator UI lifecycle test passed: create/sign with disposable demo
+  keys, archive and restore a certificate, cancel and confirm deletion, archive
+  the CA, find it through Archived, and restore it.
+- An initial UI run exposed clipped confirmation-dialog text and no visible
+  Cancel action. The final standard alert shows the full explanation and explicit
+  Cancel/Delete buttons; screenshots were exported and visually inspected in
+  `.build/archive-review-final/`.
+- Native Mac build and strict Swift formatting checks passed. The existing broad
+  create/sign/export UI test was not rerun; real-device key operations were not
+  needed for these inventory-only changes.
+
+The shared tests verify persistence across reload, legacy removed-key records
+remaining non-restorable, signing rejection before serial reservation for archived
+CAs, retained duplicate checks for archived certificates, unchanged serial/key
+material after deletion, and no in-memory or on-disk mutation after failed writes.
+
 ## Native Mac first cut — 2026-09-17
 
 - Native Apple silicon Debug and unsigned Release builds passed with Xcode 26.2.
