@@ -112,6 +112,48 @@ final class EzcryptUITests: XCTestCase {
     app.buttons["archive-authority"].tap()
     XCTAssertTrue(app.buttons["authority-visibility"].waitForExistence(timeout: 5))
   }
+  /// A trust offer for a valid Ed25519 endpoint nobody listens on, so delivery
+  /// stays pending until "Copy instead" cancels it.
+  private static let trustURL =
+    "ezcrypt://link?v=1&k=trust&n=DXkjIG5OQjn-78xvw45oUCR_EsLgqNtPTCfd9TqVXr4&s=AAECAwQFBgcICQoLDA0ODw&h=testhost&u=alice"
+  @MainActor func testTrustOfferCopyInstead() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo"]
+    app.launch()
+    XCTAssertTrue(app.buttons["add-ca"].waitForExistence(timeout: 10))
+    let name = "Trust \(UUID().uuidString.prefix(6))"
+    app.buttons["add-ca"].tap()
+    let nameField = app.textFields["ca-name"]
+    XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+    nameField.tap()
+    nameField.typeText(name + "\n")
+    app.buttons["confirm-create-ca"].tap()
+    XCTAssertTrue(nameField.waitForNonExistence(timeout: 15))
+    app.open(try XCTUnwrap(URL(string: Self.trustURL)))
+    XCTAssertTrue(app.staticTexts["alice@testhost"].waitForExistence(timeout: 10))
+    let authority = app.buttons.matching(
+      NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "link-authority", name)
+    ).firstMatch
+    reveal(authority, in: app, above: app.buttons["link-send"])
+    authority.tap()
+    capture(app, name: "Trust offer")
+    app.buttons["link-send"].tap()
+    let copy = app.buttons["copy-instead"]
+    XCTAssertTrue(copy.waitForExistence(timeout: 5))
+    let waiting = app.descendants(matching: .any).matching(
+      NSPredicate(
+        format: "identifier == %@ AND label CONTAINS %@", "delivery-status",
+        "Waiting for confirmation on testhost")
+    ).firstMatch
+    XCTAssertTrue(waiting.waitForExistence(timeout: 10))
+    capture(app, name: "Delivering")
+    copy.tap()
+    let reply = app.staticTexts["reply-text"]
+    XCTAssertTrue(reply.waitForExistence(timeout: 5))
+    XCTAssertTrue(reply.label.hasPrefix("ezcrypt1:"), reply.label)
+    XCTAssertTrue(app.staticTexts["Paste this into the waiting terminal."].exists)
+    capture(app, name: "Reply to paste")
+  }
   @MainActor private func fillSigning(
     _ app: XCUIApplication, publicKey: String, capturing: Bool = false
   ) {

@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct EzcryptApp: App {
   @State private var store = InventoryStore()
+  @State private var router = LinkRouter()
   @Environment(\.scenePhase) private var phase
   var body: some Scene {
     #if os(macOS)
@@ -16,7 +17,8 @@ struct EzcryptApp: App {
     #endif
   }
   private var content: some View {
-    AppView().environment(store).tint(Ink.accent)
+    AppView().environment(store).environment(router).tint(Ink.accent)
+      .onOpenURL { router.open($0) }
       .task(id: phase) {
         guard phase == .active else { return }
         if store.loadFailure != nil { store.reload() }
@@ -38,6 +40,7 @@ struct EzcryptApp: App {
 }
 struct AppView: View {
   @Environment(InventoryStore.self) private var store
+  @Environment(LinkRouter.self) private var router
   @State private var recovery: CertificateRecord?
   var body: some View {
     @Bindable var store = store
@@ -102,5 +105,11 @@ struct AppView: View {
           }
       }.editorSize().environment(store)
     }
+    .sheet(
+      isPresented: Binding(get: { router.presenting }, set: { if !$0 { router.close() } })
+    ) {
+      LinkSheet().environment(store).environment(router)
+    }
+    .linkErrorAlert(router, when: !router.presenting)
   }
 }

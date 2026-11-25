@@ -10,6 +10,7 @@
 
   struct MacInventoryView: View {
     @Environment(InventoryStore.self) private var store
+    @Environment(LinkRouter.self) private var router
     @State private var section: InventorySection? = .authorities
     @State private var authorityID: UUID?
     @State private var certificateID: UUID?
@@ -149,6 +150,10 @@
       .navigationSplitViewStyle(.balanced)
       .focusedSceneValue(\.createAuthority, canCreate ? { startCreating() } : nil)
       .toolbar {
+        ToolbarItem(placement: .primaryAction) {
+          Button("Open Link", systemImage: "link") { router.scanning = true }
+            .accessibilityIdentifier("open-link")
+        }
         ToolbarItem(placement: .primaryAction) {
           Button("New Authority", systemImage: "plus") { startCreating() }
             .disabled(!canCreate)

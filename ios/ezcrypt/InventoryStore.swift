@@ -61,6 +61,11 @@ final class InventoryStore {
   var certificates: [CertificateRecord] {
     inventory.certificates.sorted { $0.issuedAt > $1.issuedAt }
   }
+  /// The authorities a link offer may use: a trusted CA key, or the CA that
+  /// signs an enrolled key. Both need an active user CA.
+  func linkAuthorities(_ kind: LinkKind) -> [Authority] {
+    visibleAuthorities(.active).filter { !$0.isArchived && $0.purpose == .user }
+  }
   func authority(_ id: UUID) -> Authority? { inventory.authorities.first { $0.id == id } }
   private func persist(_ next: Inventory) throws {
     guard loadFailure == nil else {

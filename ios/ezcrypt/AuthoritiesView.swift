@@ -21,6 +21,7 @@ private enum AuthoritySheet: Identifiable {
 }
 struct AuthoritiesView: View {
   @Environment(InventoryStore.self) private var store
+  @Environment(LinkRouter.self) private var router
   @State private var sheet: AuthoritySheet?
   @State private var visibility = InventoryVisibility.active
   var body: some View {
@@ -69,6 +70,12 @@ struct AuthoritiesView: View {
     }
     .navigationTitle("Authorities")
     .toolbar {
+      #if os(iOS)
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Scan", systemImage: "qrcode.viewfinder") { router.scanning = true }
+            .accessibilityIdentifier("scan-link")
+        }
+      #endif
       ToolbarItem(placement: .primaryAction) {
         Menu("Show", systemImage: "line.3.horizontal.decrease") {
           Picker("Inventory", selection: $visibility) {
