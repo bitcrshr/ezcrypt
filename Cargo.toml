@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ezcrypt-core", "crates/ezcrypt-ffi"]
+members = ["crates/ezcrypt-core", "crates/ezcrypt-ffi", "crates/ezcrypt-link"]
 resolver = "2"
 
 [profile.release]
