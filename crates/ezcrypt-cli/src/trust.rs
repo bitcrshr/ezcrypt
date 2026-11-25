@@ -319,6 +319,29 @@ fn run(
     let key_path = under(root, KEY_FILE);
     let config_path = under(root, SSHD_CONFIG);
 
+    // Read the effective setting before writing anything: an existing
+    // TrustedUserCAKeys elsewhere would otherwise be overridden by our drop-in.
+    let pre = sshd.effective_trusted_user_ca_keys()?;
+    if let Some(existing) = pre.as_deref().filter(|p| *p != KEY_FILE) {
+        if !use_existing {
+            bail!("{}", shadow_message(Some(existing)));
+        }
+        return append_existing(txn, root, existing, line, key, sshd);
+    }
+
+    let config = fs::read(&config_path).with_context(|| format!("reading {SSHD_CONFIG}"))?;
+    let added_include = !has_include(&String::from_utf8_lossy(&config));
+    if added_include
+        && fs::symlink_metadata(&config_path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+    {
+        bail!(
+            "{SSHD_CONFIG} is a symlink, so it is managed elsewhere (for example NixOS). \
+             Add `{INCLUDE_LINE}` to it there and rerun."
+        );
+    }
+
     let added_key = append_key(txn, &key_path, line, key)?;
 
     let dropin = format!("TrustedUserCAKeys {KEY_FILE}\n");
@@ -328,8 +351,6 @@ fn run(
         txn.write(&dropin_path, dropin.as_bytes())?;
     }
 
-    let config = fs::read(&config_path).with_context(|| format!("reading {SSHD_CONFIG}"))?;
-    let added_include = !has_include(&String::from_utf8_lossy(&config));
     if added_include {
         let mut new = format!("{INCLUDE_LINE}\n").into_bytes();
         new.extend_from_slice(&config);
@@ -350,10 +371,7 @@ fn run(
 
     let existing = match (&effective, use_existing) {
         (Some(p), true) => p.clone(),
-        _ => bail!(
-            "TrustedUserCAKeys is already set to {}. Rerun with --use-existing to add this CA there.",
-            effective.as_deref().unwrap_or("none")
-        ),
+        _ => bail!("{}", shadow_message(effective.as_deref())),
     };
 
     // Put back our key file, drop-in and Include, then use the existing file.
@@ -361,7 +379,25 @@ fn run(
     if !failures.is_empty() {
         bail!("could not undo changes: {}", failures.join("; "));
     }
-    let target = under(root, &existing);
+    append_existing(txn, root, &existing, line, key, sshd)
+}
+
+fn shadow_message(effective: Option<&str>) -> String {
+    format!(
+        "TrustedUserCAKeys is already set to {}. Rerun with --use-existing to add this CA there.",
+        effective.unwrap_or("none")
+    )
+}
+
+fn append_existing(
+    txn: &mut Txn,
+    root: &Path,
+    existing: &str,
+    line: &str,
+    key: &PublicKey,
+    sshd: &dyn Sshd,
+) -> Result<Report> {
+    let target = under(root, existing);
     let added = append_key(txn, &target, line, key)?;
     sshd.test().context("validating sshd configuration")?;
     sshd.reload()?;
@@ -489,7 +525,10 @@ mod tests {
             cfg,
             format!("Include /etc/ssh/sshd_config.d/*.conf\n{SSHD_CONFIG}")
         );
-        assert_eq!(sshd.calls(), vec!["test", "effective", "reload"]);
+        assert_eq!(
+            sshd.calls(),
+            vec!["effective", "test", "effective", "reload"]
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -598,7 +637,7 @@ mod tests {
         assert!(!d.path().join("etc/ssh/ezcrypt").exists());
         assert!(!d.path().join("etc/ssh/sshd_config.d").exists());
         assert_eq!(read(d.path(), "etc/ssh/sshd_config"), SSHD_CONFIG);
-        assert_eq!(sshd.calls(), vec!["test", "effective", "test", "reload"]);
+        assert_eq!(sshd.calls(), vec!["effective", "test", "reload"]);
         // idempotent
         let r = install(d.path(), &line, "new", true, &sshd).unwrap();
         assert!(r.already_present);
@@ -623,7 +662,7 @@ mod tests {
         sshd.test_fails.set(true);
         assert!(install(d.path(), &ca_line(""), "ca", false, &sshd).is_err());
         assert_eq!(tree(d.path()), before);
-        assert_eq!(sshd.calls(), vec!["test"]);
+        assert_eq!(sshd.calls(), vec!["effective", "test"]);
     }
 
     #[test]
@@ -677,5 +716,72 @@ mod tests {
         let before = tree(d.path());
         assert!(install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).is_err());
         assert_eq!(tree(d.path()), before);
+    }
+
+    #[test]
+    fn preexisting_main_config_setting_refuses_untouched() {
+        let cfg = format!("{SSHD_CONFIG}TrustedUserCAKeys /etc/ssh/legacy_ca\n");
+        let d = setup(&cfg);
+        std::fs::write(d.path().join("etc/ssh/legacy_ca"), "ssh-ed25519 AAAA old\n").unwrap();
+        let before = tree(d.path());
+        let sshd = FakeSshd::new(Some("/etc/ssh/legacy_ca"));
+        let e = install(d.path(), &ca_line(""), "ca", false, &sshd).unwrap_err();
+        assert!(format!("{e}").contains("already set to /etc/ssh/legacy_ca"));
+        assert_eq!(tree(d.path()), before);
+        assert_eq!(sshd.calls(), vec!["effective"]);
+    }
+
+    #[test]
+    fn preexisting_main_config_setting_with_use_existing_appends_only() {
+        let cfg = format!("{SSHD_CONFIG}TrustedUserCAKeys /etc/ssh/legacy_ca\n");
+        let d = setup(&cfg);
+        std::fs::write(d.path().join("etc/ssh/legacy_ca"), "ssh-ed25519 AAAA old\n").unwrap();
+        let sshd = FakeSshd::new(Some("/etc/ssh/legacy_ca"));
+        install(d.path(), &ca_line(""), "ca", true, &sshd).unwrap();
+        assert!(read(d.path(), "etc/ssh/legacy_ca").ends_with(" ca\n"));
+        assert_eq!(read(d.path(), "etc/ssh/sshd_config"), cfg);
+        assert!(!d.path().join("etc/ssh/sshd_config.d").exists());
+        assert!(!d.path().join("etc/ssh/ezcrypt").exists());
+        assert_eq!(sshd.calls(), vec!["effective", "test", "reload"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_sshd_config_needing_include_is_refused() {
+        let d = setup("");
+        let real = d.path().join("real_config");
+        std::fs::write(&real, "Port 22\n").unwrap();
+        let link = d.path().join("etc/ssh/sshd_config");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let before = tree(d.path());
+        let e = install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).unwrap_err();
+        assert!(format!("{e}").contains("managed elsewhere"));
+        assert_eq!(tree(d.path()), before);
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_sshd_config_with_include_is_fine() {
+        let d = setup("");
+        let real = d.path().join("real_config");
+        std::fs::write(&real, "Include /etc/ssh/sshd_config.d/*.conf\nPort 22\n").unwrap();
+        let link = d.path().join("etc/ssh/sshd_config");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let r = install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).unwrap();
+        assert!(!r.added_include);
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 }
