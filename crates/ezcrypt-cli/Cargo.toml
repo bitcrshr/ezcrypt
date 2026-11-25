@@ -1,0 +1,24 @@
+[package]
+name = "ezcrypt-cli"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "ezcrypt"
+path = "src/main.rs"
+
+[dependencies]
+ezcrypt-core = { path = "../ezcrypt-core" }
+ezcrypt-link = { path = "../ezcrypt-link" }
+ssh-key = { version = "0.6.7", features = ["ed25519", "p256", "p384", "p521"] }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+qrcode = { version = "0.14", default-features = false }
+tempfile = "3"
+anyhow = "1"
+gethostname = "1"
+
+[dev-dependencies]
+rand = "0.8"
+ssh-key = { version = "0.6.7", features = ["ed25519", "p256", "p384", "p521", "getrandom"] }
