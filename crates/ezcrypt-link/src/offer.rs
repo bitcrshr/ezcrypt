@@ -8,7 +8,7 @@ use crate::{LinkError, VERSION};
 const MAX_URL: usize = 1024;
 const MAX_HOST: usize = 253;
 const MAX_USER: usize = 64;
-const MAX_SUBJECT: usize = 1024;
+const MAX_SUBJECT: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -45,7 +45,7 @@ fn is_bidi_format(c: char) -> bool {
     matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
-fn check_text(name: &str, value: &str, max: usize) -> Result<(), LinkError> {
+pub(crate) fn check_text(name: &str, value: &str, max: usize) -> Result<(), LinkError> {
     if value.is_empty() {
         return Err(LinkError::Malformed(format!("{name} is empty")));
     }
@@ -87,6 +87,14 @@ impl Offer {
             return Err(malformed("not an ezcrypt link"));
         }
 
+        // Check the version first so a future format reports Version, not Malformed.
+        let first_v = url.query_pairs().find(|(key, _)| key == "v");
+        let first_v = first_v.ok_or_else(|| malformed("missing parameter v"))?.1;
+        let theirs: u8 = first_v.parse().map_err(|_| malformed("bad version"))?;
+        if theirs != VERSION {
+            return Err(LinkError::Version { theirs });
+        }
+
         let (mut v, mut k, mut n, mut s, mut h, mut u, mut p) =
             (None, None, None, None, None, None, None);
         for (key, value) in url.query_pairs() {
@@ -106,11 +114,7 @@ impl Offer {
         }
 
         let missing = |name: &str| LinkError::Malformed(format!("missing parameter {name}"));
-        let v = v.ok_or_else(|| missing("v"))?;
-        let theirs: u8 = v.parse().map_err(|_| malformed("bad version"))?;
-        if theirs != VERSION {
-            return Err(LinkError::Version { theirs });
-        }
+        v.ok_or_else(|| missing("v"))?;
         let kind = match k.ok_or_else(|| missing("k"))?.as_str() {
             "trust" => Kind::Trust,
             "enroll" => Kind::Enroll,

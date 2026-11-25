@@ -109,12 +109,26 @@ fn offer_url_rejects() {
     }
     // subject limits
     let enroll = |p: Vec<u8>| url_with(&[("k", s("enroll")), ("p", Some(B64.encode(p)))]);
-    Offer::from_url(&enroll(vec![1; 600])).unwrap();
-    assert!(Offer::from_url(&enroll(vec![1; 1025])).is_err());
+    Offer::from_url(&enroll(vec![1; 256])).unwrap();
+    // 257 bytes still fits under the URL cap, so only the subject limit can reject it
+    let long = enroll(vec![1; 257]);
+    assert!(long.len() < 1024);
+    match Offer::from_url(&long) {
+        Err(LinkError::Malformed(m)) => assert!(m.contains("subject"), "{m}"),
+        other => panic!("{other:?}"),
+    }
     assert!(Offer::from_url(&url_with(&[("k", s("enroll"))])).is_err());
     assert!(Offer::from_url(&url_with(&[("p", Some(B64.encode([1u8; 4])))])).is_err());
-    // total length: a 1024-byte subject alone pushes the URL over 1024
-    assert!(Offer::from_url(&enroll(vec![1; 1024])).is_err());
+    // total URL length
+    match Offer::from_url(&format!("{}&x={}", url_with(&[]), "a".repeat(1024))) {
+        Err(LinkError::Malformed(m)) => assert!(m.contains("too long"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    // version is reported even with unknown parameters
+    assert!(matches!(
+        Offer::from_url(&format!("{}&x=1", url_with(&[("v", s("2"))]))),
+        Err(LinkError::Version { theirs: 2 })
+    ));
     // duplicates, unknown params, wrong scheme
     assert!(Offer::from_url(&format!("{}&h=other.com", url_with(&[]))).is_err());
     assert!(Offer::from_url(&format!("{}&x=1", url_with(&[]))).is_err());
@@ -175,7 +189,7 @@ fn reply_text_rejects() {
         Reply::from_text(&enc(
             r#"{"v":2,"secret":"AAAAAAAAAAAAAAAAAAAAAA","payload":{"type":"certificate","certificate":"x"}}"#
         )),
-        Err(LinkError::Version { theirs: 2 })
+        Err(LinkError::ReplyVersion { theirs: 2 })
     ));
     let big = format!(
         r#"{{"v":1,"secret":"AAAAAAAAAAAAAAAAAAAAAA","payload":{{"type":"certificate","certificate":"{}"}}}}"#,
@@ -194,6 +208,27 @@ fn reply_text_rejects() {
 }
 
 #[test]
+fn reply_rejects_bad_ca_name() {
+    let long = "a".repeat(257);
+    for name in [
+        "\u{1b}[2K\u{1b}[1Aevil\n",
+        "a\nb",
+        "a\u{202e}b",
+        "",
+        long.as_str(),
+    ] {
+        let j = serde_json::json!({"v":1,"secret":"AAAAAAAAAAAAAAAAAAAAAA",
+            "payload":{"type":"ca_key","public_key":"k","name":name}})
+        .to_string();
+        assert!(
+            matches!(Reply::from_json(j.as_bytes()), Err(LinkError::Malformed(_))),
+            "{name:?}"
+        );
+        assert!(Reply::from_text(&format!("ezcrypt1:{}", B64.encode(&j))).is_err());
+    }
+}
+
+#[test]
 fn error_display() {
     assert_eq!(
         LinkError::Version { theirs: 2 }.to_string(),
@@ -202,6 +237,14 @@ fn error_display() {
     assert_eq!(
         LinkError::Version { theirs: 0 }.to_string(),
         "Update the ezcrypt command-line tool"
+    );
+    assert_eq!(
+        LinkError::ReplyVersion { theirs: 2 }.to_string(),
+        "Update the ezcrypt command-line tool to accept this reply"
+    );
+    assert_eq!(
+        LinkError::ReplyVersion { theirs: 0 }.to_string(),
+        "Update the ezcrypt app"
     );
     assert_eq!(
         LinkError::Unreachable.to_string(),

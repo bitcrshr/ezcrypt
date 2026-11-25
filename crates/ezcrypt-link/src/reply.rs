@@ -2,10 +2,12 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use serde::{Deserialize, Serialize};
 
+use crate::offer::check_text;
 use crate::{LinkError, VERSION};
 
 const PREFIX: &str = "ezcrypt1:";
 const MAX_JSON: usize = 64 * 1024;
+const MAX_NAME: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -60,19 +62,27 @@ impl Reply {
             .strip_prefix(PREFIX)
             .ok_or_else(|| malformed("missing ezcrypt1: prefix"))?;
         let json = B64.decode(body).map_err(|_| malformed("bad base64"))?;
+        Reply::from_json(&json)
+    }
+
+    /// Parse and validate reply JSON; every path that reads a Reply from bytes uses this.
+    pub fn from_json(json: &[u8]) -> Result<Reply, LinkError> {
         if json.len() > MAX_JSON {
             return Err(malformed("reply is too large"));
         }
-        let header: Header = serde_json::from_slice(&json).map_err(|_| malformed("bad JSON"))?;
+        let header: Header = serde_json::from_slice(json).map_err(|_| malformed("bad JSON"))?;
         if header.v != VERSION {
-            return Err(LinkError::Version { theirs: header.v });
+            return Err(LinkError::ReplyVersion { theirs: header.v });
         }
-        let wire: Wire = serde_json::from_slice(&json).map_err(|_| malformed("bad reply"))?;
+        let wire: Wire = serde_json::from_slice(json).map_err(|_| malformed("bad reply"))?;
         let secret: [u8; 16] = B64
             .decode(wire.secret)
             .ok()
             .and_then(|b| b.try_into().ok())
             .ok_or_else(|| malformed("bad secret"))?;
+        if let Payload::CaKey { name, .. } = &wire.payload {
+            check_text("name", name, MAX_NAME)?;
+        }
         Ok(Reply {
             secret,
             payload: wire.payload,

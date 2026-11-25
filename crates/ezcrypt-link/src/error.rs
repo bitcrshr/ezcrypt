@@ -6,6 +6,8 @@ use crate::VERSION;
 pub enum LinkError {
     #[error("{}", version_message(*.theirs))]
     Version { theirs: u8 },
+    #[error("{}", reply_version_message(*.theirs))]
+    ReplyVersion { theirs: u8 },
     #[error("Malformed link data: {0}")]
     Malformed(String),
     #[error("The link secret did not match")]
@@ -27,5 +29,13 @@ fn version_message(theirs: u8) -> &'static str {
         "This QR code needs a newer ezcrypt app"
     } else {
         "Update the ezcrypt command-line tool"
+    }
+}
+
+fn reply_version_message(theirs: u8) -> &'static str {
+    if theirs > VERSION {
+        "Update the ezcrypt command-line tool to accept this reply"
+    } else {
+        "Update the ezcrypt app"
     }
 }
