@@ -45,7 +45,23 @@ extension View {
 /// Who is asking, and what. Shown above every step of an offer.
 struct OfferHeader: View {
   let offer: LinkOffer
+  /// Inside the signing editor, where the title would repeat the navigation title.
+  var signing = false
   var body: some View {
+    if signing { signingHeader } else { header }
+  }
+  private var signingHeader: some View {
+    VStack(spacing: 6) {
+      Text(verbatim: "For \(offer.user)@\(offer.host)").font(.title3.weight(.semibold))
+        .multilineTextAlignment(.center)
+      if let fingerprint = offer.subjectFingerprint {
+        Text(verbatim: fingerprint).font(.caption.monospaced()).foregroundStyle(.secondary)
+          .textSelection(.enabled)
+      }
+    }
+    .frame(maxWidth: .infinity).padding(.vertical, 8)
+  }
+  private var header: some View {
     VStack(spacing: 6) {
       Image(systemName: offer.kind == .trust ? "checkmark.shield" : "person.badge.key")
         .font(.system(size: 40)).foregroundStyle(Ink.accent)
@@ -67,20 +83,13 @@ struct LinkView: View {
   @State private var selection: UUID?
   @State private var payload: LinkPayload?
   @State private var creating = false
+  @State private var signing: Authority?
   var body: some View {
     Group {
       if let payload {
         DeliveryView(offer: offer, payload: payload)
-      } else if offer.kind == .trust {
-        trust
       } else {
-        List {
-          Section { OfferHeader(offer: offer).listRowBackground(Color.clear) }
-          Section {
-            Text("This version of ezcrypt can’t sign keys from a link yet.")
-              .foregroundStyle(.secondary)
-          }
-        }
+        picker
       }
     }
     .navigationTitle(offer.kind == .trust ? "Trust CA" : "Sign Key").inlineNavigationTitle()
@@ -90,12 +99,16 @@ struct LinkView: View {
           .accessibilityIdentifier("close-link")
       }
     }
+    .navigationDestination(item: $signing) { authority in
+      SigningView(authority: authority, link: offer)
+    }
     .sheet(isPresented: $creating) {
       NavigationStack { CreateAuthorityView() }.editorSize().environment(store)
     }
   }
-  @ViewBuilder private var trust: some View {
-    let authorities = store.linkAuthorities(.trust)
+  @ViewBuilder private var picker: some View {
+    let authorities = store.linkAuthorities(offer.kind)
+    let trusting = offer.kind == .trust
     List {
       Section { OfferHeader(offer: offer).listRowBackground(Color.clear) }
       if !authorities.isEmpty {
@@ -119,7 +132,9 @@ struct LinkView: View {
           Text("User CA")
         } footer: {
           Text(
-            "\(offer.host) will accept certificates from this CA for SSH logins. Only its public key is sent."
+            trusting
+              ? "\(offer.host) will accept certificates from this CA for SSH logins. Only its public key is sent."
+              : "This CA signs the key \(offer.host) asked for. You review the certificate before it is sent."
           )
         }
       }
@@ -129,7 +144,11 @@ struct LinkView: View {
         ContentUnavailableView {
           Label("No User CA", systemImage: "key.horizontal")
         } description: {
-          Text("\(offer.host) needs a user CA to trust. Create one, then send its public key.")
+          Text(
+            trusting
+              ? "\(offer.host) needs a user CA to trust. Create one, then send its public key."
+              : "Signing a key for \(offer.host) needs a user CA. Create one, then sign."
+          )
         } actions: {
           Button("Create Authority") { creating = true }.buttonStyle(.glassProminent)
             .accessibilityIdentifier("link-create-ca")
@@ -138,9 +157,15 @@ struct LinkView: View {
     }
     .actionBar {
       if !authorities.isEmpty {
-        PrimaryButton(title: "Send", symbol: "paperplane") {
+        PrimaryButton(
+          title: trusting ? "Send" : "Continue", symbol: trusting ? "paperplane" : "arrow.right"
+        ) {
           guard let authority = authorities.first(where: { $0.id == selection }) else { return }
-          payload = .caKey(publicKey: authority.publicKey, name: authority.name)
+          if trusting {
+            payload = .caKey(publicKey: authority.publicKey, name: authority.name)
+          } else {
+            signing = authority
+          }
         }
         .disabled(selection.map { id in !authorities.contains { $0.id == id } } ?? true)
         .accessibilityIdentifier("link-send")

@@ -165,6 +165,68 @@ final class EzcryptUITests: XCTestCase {
     XCTAssertFalse(app.descendants(matching: .any)["scan-view"].exists)
     XCTAssertTrue(app.buttons["add-ca"].isHittable)
   }
+  private static let enrollKey =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  /// An enroll offer for `enrollKey`, with the trust test's endpoint and secret.
+  private static var enrollURL: String {
+    let blob = Data(base64Encoded: String(enrollKey.split(separator: " ")[1]))!
+    let key = blob.base64EncodedString()
+      .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "=", with: "")
+    return
+      "ezcrypt://link?v=1&k=enroll&n=DXkjIG5OQjn-78xvw45oUCR_EsLgqNtPTCfd9TqVXr4&s=AAECAwQFBgcICQoLDA0ODw&h=testhost&u=alice&p=\(key)"
+  }
+  @MainActor func testEnrollOfferSignsAndCopies() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo"]
+    app.launch()
+    XCTAssertTrue(app.buttons["add-ca"].waitForExistence(timeout: 10))
+    let name = "Enroll \(UUID().uuidString.prefix(6))"
+    app.buttons["add-ca"].tap()
+    let nameField = app.textFields["ca-name"]
+    XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+    nameField.tap()
+    nameField.typeText(name + "\n")
+    app.buttons["confirm-create-ca"].tap()
+    XCTAssertTrue(nameField.waitForNonExistence(timeout: 15))
+    app.open(try XCTUnwrap(URL(string: Self.enrollURL)))
+    XCTAssertTrue(app.staticTexts["alice@testhost"].waitForExistence(timeout: 10))
+    let authority = app.buttons.matching(
+      NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "link-authority", name)
+    ).firstMatch
+    reveal(authority, in: app, above: app.buttons["link-send"])
+    authority.tap()
+    app.buttons["link-send"].tap()
+    let key = app.descendants(matching: .any)["subject-key"]
+    XCTAssertTrue(key.waitForExistence(timeout: 5))
+    XCTAssertEqual(key.label, Self.enrollKey)
+    XCTAssertEqual(app.textFields["principals"].value as? String, "alice")
+    capture(app, name: "Enroll offer")
+    app.buttons["review-certificate"].tap()
+    let sign = app.buttons["confirm-sign"]
+    reveal(sign, in: app)
+    sign.tap()
+    let copy = app.buttons["copy-instead"]
+    XCTAssertTrue(copy.waitForExistence(timeout: 10))
+    let settled = app.descendants(matching: .any).matching(
+      NSPredicate(
+        format: "(identifier == %@ AND label CONTAINS %@) OR identifier == %@", "delivery-status",
+        "Waiting for confirmation on testhost", "delivery-retry")
+    ).firstMatch
+    XCTAssertTrue(settled.waitForExistence(timeout: 10))
+    copy.tap()
+    let reply = app.staticTexts["reply-text"]
+    XCTAssertTrue(reply.waitForExistence(timeout: 5))
+    XCTAssertTrue(reply.label.hasPrefix("ezcrypt1:"), reply.label)
+    app.buttons["close-link"].tap()
+    XCTAssertTrue(reply.waitForNonExistence(timeout: 5))
+    app.tabBars.buttons["Certificates"].tap()
+    // The demo inventory outlives each launch, so count by this test's own CA. Each
+    // certificate row is one combined element naming its authority.
+    let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", name))
+    XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+    XCTAssertEqual(rows.count, 1)
+  }
   @MainActor private func fillSigning(
     _ app: XCUIApplication, publicKey: String, capturing: Bool = false
   ) {

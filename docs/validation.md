@@ -139,3 +139,22 @@ certificate while preserving the serial gap.
 The GPG test covers a common Curve25519 recipient. Other recipient algorithms the
 PGP library accepts have not all been qualified. Import into ezcrypt, sync,
 inventory backup, and revocation distribution are not implemented.
+
+## Link distribution — 2026-11-24 (pending device run)
+
+Automated coverage (simulator, demo mode) exercises offer parsing, the trust and
+enroll flows through "Copy instead", and the reply text. The checks below need a
+real iPhone and real machines and have NOT been run yet.
+
+- [ ] Pending: enroll from a Mac. Run `cargo run -p ezcrypt-cli -- enroll`, scan
+  the code, sign with Face ID, and confirm `ssh` uses the delivered certificate.
+- [ ] Pending: enroll from a Linux VM. Same flow, confirming the certificate is
+  installed and `ssh` offers it.
+- [ ] Pending: trust. Run `sudo ezcrypt trust` on the VM, send a user CA from the
+  phone, and confirm a real login with a certificate from that CA.
+- [ ] Pending: paste. Repeat the enroll and trust flows using "Copy instead" and
+  pasting the reply into the waiting terminal.
+- [ ] Pending: open an offer from a deep link (camera app or Notes) and confirm
+  the sheet opens straight to it.
+- Known gap: if issuing ends in the pending-recovery path, the saved certificate
+  has no "Send to <host>" button; deliver it by exporting from Certificates.

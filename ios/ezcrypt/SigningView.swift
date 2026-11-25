@@ -22,10 +22,14 @@ private enum Validity: String, CaseIterable, Identifiable {
 struct SigningView: View {
   @Environment(InventoryStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  /// Present in the app, where an offer's flow ends by closing the link sheet.
+  @Environment(LinkRouter.self) private var router: LinkRouter?
   @Environment(\.dynamicTypeSize) private var typeSize
   let authority: Authority
-  @State private var publicKey = ""
-  @State private var principalText = ""
+  /// An enroll offer being answered: it fixes the key to sign and who it is for.
+  let link: LinkOffer?
+  @State private var publicKey: String
+  @State private var principalText: String
   @State private var allPrincipals = false
   @State private var keyID = ""
   @State private var serial = ""
@@ -42,6 +46,13 @@ struct SigningView: View {
   @State private var working = false
   @State private var importing = false
   @State private var acknowledgeDuplicate = false
+
+  init(authority: Authority, link: LinkOffer? = nil) {
+    self.authority = authority
+    self.link = link
+    _publicKey = State(initialValue: link?.subjectPublicKey ?? "")
+    _principalText = State(initialValue: link?.user ?? "")
+  }
 
   private var completed: Bool {
     issued != nil
@@ -74,7 +85,11 @@ struct SigningView: View {
   var body: some View {
     Group {
       if let issued {
-        CertificateDetail(certificate: issued)
+        if let link {
+          DeliveryView(offer: link, payload: .certificate(issued.payload.certificate))
+        } else {
+          CertificateDetail(certificate: issued)
+        }
       } else if let recovery {
         PendingCertificateView(certificate: recovery)
       } else if let prepared {
@@ -94,8 +109,11 @@ struct SigningView: View {
     .sensoryFeedback(.success, trigger: completed) { _, new in new }
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
-        Button(issued == nil && recovery == nil ? "Cancel" : "Done") { dismiss() }.disabled(
-          working || store.busy)
+        Button(issued == nil && recovery == nil ? "Cancel" : "Done") {
+          if link != nil, let router { router.close() } else { dismiss() }
+        }
+        .disabled(working || store.busy)
+        .accessibilityIdentifier(link == nil ? "close-signing" : "close-link")
       }
     }
     .interactiveDismissDisabled(working || store.busy)
@@ -116,12 +134,20 @@ struct SigningView: View {
   }
   private var editor: some View {
     Form {
+      if let link {
+        Section { OfferHeader(offer: link, signing: true).listRowBackground(Color.clear) }
+      }
       Section {
-        TextField(
-          "Public key", text: $publicKey, prompt: Text("ssh-ed25519 AAAA…"), axis: .vertical
-        )
-        .font(.footnote.monospaced()).lineLimit(3...6).verbatimInput()
-        .autocorrectionDisabled().accessibilityIdentifier("subject-key")
+        if link != nil {
+          Text(verbatim: publicKey).font(.footnote.monospaced()).textSelection(.enabled)
+            .accessibilityIdentifier("subject-key")
+        } else {
+          TextField(
+            "Public key", text: $publicKey, prompt: Text("ssh-ed25519 AAAA…"), axis: .vertical
+          )
+          .font(.footnote.monospaced()).lineLimit(3...6).verbatimInput()
+          .autocorrectionDisabled().accessibilityIdentifier("subject-key")
+        }
         if let detected = SubjectKeyKind(publicKey) {
           Label {
             HStack {
@@ -139,7 +165,7 @@ struct SigningView: View {
             .foregroundStyle(detected.supported ? .green : .orange)
           }
           .font(.subheadline)
-        } else {
+        } else if link == nil {
           HStack {
             PasteButton(payloadType: String.self) { publicKey = $0.first ?? "" }
             Spacer()
@@ -150,7 +176,11 @@ struct SigningView: View {
       } header: {
         Text("Public Key")
       } footer: {
-        Text("Ed25519, ECDSA, or FIDO2 security key (sk-) in OpenSSH format.")
+        if link != nil {
+          Text("The key \(link?.host ?? "the machine") asked to have signed.")
+        } else {
+          Text("Ed25519, ECDSA, or FIDO2 security key (sk-) in OpenSSH format.")
+        }
       }
       Section {
         if !allPrincipals {
