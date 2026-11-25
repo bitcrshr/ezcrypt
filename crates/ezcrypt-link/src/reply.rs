@@ -9,6 +9,8 @@ use crate::{LinkError, VERSION};
 const PREFIX: &str = "ezcrypt1:";
 pub(crate) const MAX_JSON: usize = 64 * 1024;
 const MAX_NAME: usize = 256;
+/// Base64 characters per line of `to_text`.
+const LINE: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -65,8 +67,17 @@ fn malformed(msg: &str) -> LinkError {
 }
 
 impl Reply {
+    /// The paste-fallback text: the prefix and base64 JSON, broken after every
+    /// `LINE` characters. Canonical-mode terminal input drops longer lines on
+    /// macOS (over 1024 bytes); `from_text` ignores the line breaks.
     pub fn to_text(&self) -> String {
-        format!("{PREFIX}{}", B64.encode(self.to_json()))
+        let body = B64.encode(self.to_json());
+        let lines: Vec<&str> = body
+            .as_bytes()
+            .chunks(LINE)
+            .map(|chunk| std::str::from_utf8(chunk).expect("base64 is ASCII"))
+            .collect();
+        format!("{PREFIX}{}", lines.join("\n"))
     }
 
     /// The reply JSON, as sent over the network and wrapped by `to_text`.

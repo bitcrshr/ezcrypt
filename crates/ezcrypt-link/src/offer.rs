@@ -68,9 +68,39 @@ fn malformed(msg: &str) -> LinkError {
     LinkError::Malformed(msg.to_string())
 }
 
-/// Bidi format characters can make one name look like another.
-fn is_bidi_format(c: char) -> bool {
-    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+/// Unicode general category Cf (format characters, Unicode 16), which
+/// includes the bidi controls and invisible characters that can make one name
+/// look like another. std has no general-category API.
+const FORMAT: &[(char, char)] = &[
+    ('\u{00AD}', '\u{00AD}'),
+    ('\u{0600}', '\u{0605}'),
+    ('\u{061C}', '\u{061C}'),
+    ('\u{06DD}', '\u{06DD}'),
+    ('\u{070F}', '\u{070F}'),
+    ('\u{0890}', '\u{0891}'),
+    ('\u{08E2}', '\u{08E2}'),
+    ('\u{180E}', '\u{180E}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206F}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+    ('\u{FFF9}', '\u{FFFB}'),
+    ('\u{110BD}', '\u{110BD}'),
+    ('\u{110CD}', '\u{110CD}'),
+    ('\u{13430}', '\u{1343F}'),
+    ('\u{1BCA0}', '\u{1BCA3}'),
+    ('\u{1D173}', '\u{1D17A}'),
+    ('\u{E0001}', '\u{E0001}'),
+    ('\u{E0020}', '\u{E007F}'),
+];
+
+/// Control (Cc) and format (Cf) characters, and the line and paragraph
+/// separators, which can break or disguise a line of text.
+fn is_hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{2028}' | '\u{2029}')
+        || FORMAT.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
 }
 
 pub(crate) fn check_text(name: &str, value: &str, max: usize) -> Result<(), LinkError> {
@@ -80,7 +110,7 @@ pub(crate) fn check_text(name: &str, value: &str, max: usize) -> Result<(), Link
     if value.len() > max {
         return Err(LinkError::Malformed(format!("{name} is too long")));
     }
-    if value.chars().any(|c| c.is_control() || is_bidi_format(c)) {
+    if value.chars().any(is_hidden) {
         return Err(LinkError::Malformed(format!(
             "{name} contains control characters"
         )));
@@ -107,6 +137,43 @@ pub(crate) fn check_fields(
         }
         (Kind::Enroll, Some(_)) => Ok(()),
     }
+}
+
+/// Splits a URL query into decoded pairs like `Url::query_pairs`, but rejects
+/// malformed escapes and invalid UTF-8 instead of substituting U+FFFD.
+fn query_pairs(query: &str) -> Result<Vec<(String, String)>, LinkError> {
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            Ok((decode(key)?, decode(value)?))
+        })
+        .collect()
+}
+
+/// `application/x-www-form-urlencoded` decoding of one component.
+fn decode(raw: &str) -> Result<String, LinkError> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' => {
+                let hex = bytes
+                    .get(i + 1..i + 3)
+                    .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+                    .ok_or_else(|| malformed("bad percent escape"))?;
+                let hex = std::str::from_utf8(hex).expect("ASCII hex digits");
+                out.push(u8::from_str_radix(hex, 16).expect("two hex digits"));
+                i += 2;
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).map_err(|_| malformed("link text is not valid UTF-8"))
 }
 
 impl Offer {
@@ -136,9 +203,11 @@ impl Offer {
             return Err(malformed("not an ezcrypt link"));
         }
 
+        let pairs = query_pairs(url.query().unwrap_or(""))?;
+
         // Check the version first so a future format reports Version, not Malformed.
-        let first_v = url.query_pairs().find(|(key, _)| key == "v");
-        let first_v = first_v.ok_or_else(|| malformed("missing parameter v"))?.1;
+        let first_v = pairs.iter().find(|(key, _)| key == "v");
+        let first_v = &first_v.ok_or_else(|| malformed("missing parameter v"))?.1;
         let theirs: u8 = first_v.parse().map_err(|_| malformed("bad version"))?;
         if theirs != VERSION {
             return Err(LinkError::Version { theirs });
@@ -146,8 +215,8 @@ impl Offer {
 
         let (mut v, mut k, mut n, mut s, mut h, mut u, mut p) =
             (None, None, None, None, None, None, None);
-        for (key, value) in url.query_pairs() {
-            let slot = match key.as_ref() {
+        for (key, value) in pairs {
+            let slot = match key.as_str() {
                 "v" => &mut v,
                 "k" => &mut k,
                 "n" => &mut n,
@@ -157,7 +226,7 @@ impl Offer {
                 "p" => &mut p,
                 other => return Err(LinkError::Malformed(format!("unknown parameter {other}"))),
             };
-            if slot.replace(value.into_owned()).is_some() {
+            if slot.replace(value).is_some() {
                 return Err(LinkError::Malformed(format!("duplicate parameter {key}")));
             }
         }

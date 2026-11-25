@@ -14,7 +14,9 @@ pub enum LinkError {
     WrongSecret,
     #[error("The reply did not contain what was expected")]
     WrongPayload,
-    #[error("The terminal session has ended. Run the command again.")]
+    #[error(
+        "Couldn't reach the computer. If the command is still waiting, try again or use Copy instead."
+    )]
     Unreachable,
     #[error("Timed out waiting for the other side")]
     Timeout,

@@ -121,16 +121,35 @@ pub fn hostname() -> String {
     gethostname::gethostname().to_string_lossy().into_owned()
 }
 
+/// The answer to the `[Y/n]` create-key prompt. Enter means yes; end of
+/// input means no, so nothing is created without someone answering.
+fn wants_new_key(answer: Option<&str>) -> bool {
+    answer.is_some_and(|a| matches!(a.trim().to_lowercase().as_str(), "" | "y" | "yes"))
+}
+
+/// Creates `~/.ssh` if it is missing, private to the user as OpenSSH expects.
+fn ensure_ssh_dir(ssh_dir: &Path) -> Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(ssh_dir)
+        .with_context(|| format!("cannot create {}", ssh_dir.display()))
+}
+
 async fn create_key(ssh_dir: &Path, input: &mut Input) -> Result<Option<KeyChoice>> {
     let path = ssh_dir.join("id_ed25519");
     let answer = input
         .prompt("No SSH key found. Create ~/.ssh/id_ed25519 now? [Y/n] ")
-        .await
-        .unwrap_or_default();
-    if !matches!(answer.trim().to_lowercase().as_str(), "" | "y" | "yes") {
+        .await;
+    if !wants_new_key(answer.as_deref()) {
         return Ok(None);
     }
-    fs::create_dir_all(ssh_dir)?;
+    ensure_ssh_dir(ssh_dir)?;
     let status = Command::new("ssh-keygen")
         .args(["-t", "ed25519", "-f"])
         .arg(&path)
@@ -315,6 +334,44 @@ mod tests {
         assert!(check_certificate(&choice, "  \n ").is_err());
         assert!(check_certificate(&choice, &format!("{good}\n{good}")).is_err());
         assert!(check_certificate(&choice, &format!("{good}\n# extra")).is_err());
+    }
+
+    #[test]
+    fn create_key_prompt_defaults_to_yes_but_eof_is_no() {
+        assert!(wants_new_key(Some("")));
+        assert!(wants_new_key(Some(" Y ")));
+        assert!(wants_new_key(Some("yes")));
+        assert!(!wants_new_key(Some("n")));
+        assert!(!wants_new_key(Some("no")));
+        assert!(!wants_new_key(None));
+    }
+
+    #[tokio::test]
+    async fn create_key_at_end_of_input_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join(".ssh");
+        let mut input = Input::from_reader(std::io::Cursor::new(""));
+        assert!(create_key(&ssh, &mut input).await.unwrap().is_none());
+        assert!(!ssh.exists());
+    }
+
+    #[test]
+    fn ssh_dir_is_created_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join("home/.ssh");
+        ensure_ssh_dir(&ssh).unwrap();
+        assert!(ssh.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&ssh).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+            // An existing directory is left as it is.
+            fs::set_permissions(&ssh, fs::Permissions::from_mode(0o750)).unwrap();
+            ensure_ssh_dir(&ssh).unwrap();
+            let mode = fs::metadata(&ssh).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o750);
+        }
     }
 
     #[test]

@@ -107,6 +107,43 @@ fn offer_url_rejects() {
         assert!(Offer::from_url(&url_with(&[("h", Some(format!("ex{c}ample.com")))])).is_err());
         assert!(Offer::from_url(&url_with(&[("u", Some(format!("al{c}ice")))])).is_err());
     }
+    // Every format character (Unicode category Cf) and the line/paragraph separators.
+    for c in [
+        '\u{AD}',
+        '\u{61C}',
+        '\u{200B}',
+        '\u{2028}',
+        '\u{2029}',
+        '\u{2060}',
+        '\u{FEFF}',
+        '\u{E0001}',
+    ] {
+        assert!(
+            Offer::from_url(&url_with(&[("h", Some(format!("ex{c}ample.com")))])).is_err(),
+            "{c:?}"
+        );
+        assert!(
+            Offer::from_url(&url_with(&[("u", Some(format!("al{c}ice")))])).is_err(),
+            "{c:?}"
+        );
+    }
+    // Invalid UTF-8 is rejected, not decoded lossily to U+FFFD.
+    let base = url_with(&[]);
+    for (from, to) in [
+        ("h=example.com", "h=ex%FFample.com"),
+        ("u=alice", "u=al%C3ice"),
+        ("k=trust", "k=tr%FFust"),
+    ] {
+        let bad = base.replace(from, to);
+        assert_ne!(bad, base);
+        assert!(
+            matches!(Offer::from_url(&bad), Err(LinkError::Malformed(_))),
+            "{bad}"
+        );
+    }
+    // Valid percent-encoded UTF-8 and '+' for space still decode.
+    let o = Offer::from_url(&base.replace("u=alice", "u=al%C3%A9+ice")).unwrap();
+    assert_eq!(o.user, "al\u{e9} ice");
     // subject limits
     let enroll = |p: Vec<u8>| url_with(&[("k", s("enroll")), ("p", Some(B64.encode(p)))]);
     Offer::from_url(&enroll(vec![1; 256])).unwrap();
@@ -163,6 +200,33 @@ fn reply_text_round_trips() {
     }
 }
 
+/// macOS terminals drop an input line over 1024 bytes, and a P-256 CA's
+/// certificate makes a reply longer than that, so `to_text` wraps it.
+#[test]
+fn reply_text_lines_are_short() {
+    let long = Reply {
+        secret: [5u8; 16],
+        payload: Payload::Certificate {
+            certificate: format!(
+                "ecdsa-sha2-nistp256-cert-v01@openssh.com {}",
+                "A".repeat(1100)
+            ),
+        },
+    };
+    for r in replies().into_iter().chain([long]) {
+        let t = r.to_text();
+        let lines: Vec<&str> = t.split('\n').collect();
+        assert!(lines[0].starts_with("ezcrypt1:"), "{t}");
+        assert!(lines.iter().all(|l| l.len() <= 76 && !l.is_empty()), "{t}");
+        assert!(lines[1..].iter().all(|l| !l.starts_with("ezcrypt1:")));
+        assert!(!t.ends_with('\n'));
+        if t.len() > 100 {
+            assert!(lines.len() > 1, "{t}");
+        }
+        assert_eq!(Reply::from_text(&t).unwrap(), r);
+    }
+}
+
 #[test]
 fn reply_text_tolerates_wrapping() {
     for r in replies() {
@@ -214,6 +278,9 @@ fn reply_rejects_bad_ca_name() {
         "\u{1b}[2K\u{1b}[1Aevil\n",
         "a\nb",
         "a\u{202e}b",
+        "a\u{61c}b",
+        "a\u{200b}b",
+        "a\u{2028}b",
         "",
         long.as_str(),
     ] {
@@ -248,7 +315,7 @@ fn error_display() {
     );
     assert_eq!(
         LinkError::Unreachable.to_string(),
-        "The terminal session has ended. Run the command again."
+        "Couldn't reach the computer. If the command is still waiting, try again or use Copy instead."
     );
 }
 
