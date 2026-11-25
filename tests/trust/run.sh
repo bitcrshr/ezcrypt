@@ -5,12 +5,10 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 image=ezcrypt-trust-test
 work=$(mktemp -d)
-containers=()
+label=ezcrypt-trust-test-$$
 
 cleanup() {
-    for c in ${containers[@]+"${containers[@]}"}; do
-        docker rm -f "$c" >/dev/null 2>&1 || true
-    done
+    docker ps -aq --filter "label=$label" | xargs docker rm -f >/dev/null 2>&1 || true
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -21,10 +19,7 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
     -o IdentitiesOnly=yes -o BatchMode=yes -o LogLevel=ERROR)
 
 start_container() {
-    local id
-    id=$(docker run -d --rm -p 127.0.0.1::22 "$@" "$image")
-    containers+=("$id")
-    echo "$id"
+    docker run -d --label "$label" -p 127.0.0.1::22 "$@" "$image"
 }
 
 wait_for_sshd() {
