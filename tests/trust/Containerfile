@@ -1,0 +1,16 @@
+FROM rust:1.94-bookworm AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --locked --release -p ezcrypt-cli --features test-hooks
+
+FROM debian:stable-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /run/sshd \
+    && useradd -m -s /bin/sh testuser \
+    && usermod -p '*' testuser
+COPY --from=build /src/target/release/ezcrypt /usr/local/bin/ezcrypt
+EXPOSE 22
+CMD ["/bin/sh", "-c", "mkdir -p /run/sshd && ssh-keygen -A && exec /usr/sbin/sshd -D -e -o PidFile=/run/sshd.pid"]

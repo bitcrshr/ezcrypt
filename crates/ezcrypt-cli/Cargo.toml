@@ -8,6 +8,9 @@ publish = false
 name = "ezcrypt"
 path = "src/main.rs"
 
+[features]
+test-hooks = []
+
 [dependencies]
 ezcrypt-core = { path = "../ezcrypt-core" }
 ezcrypt-link = { path = "../ezcrypt-link" }

@@ -2,7 +2,6 @@ mod enroll;
 mod input;
 mod qr;
 mod session;
-#[allow(dead_code)]
 mod trust;
 
 use std::path::PathBuf;
@@ -34,6 +33,10 @@ enum Command {
         yes: bool,
         #[arg(long)]
         use_existing: bool,
+        /// Test only: read the reply from a file instead of a phone session.
+        #[cfg(feature = "test-hooks")]
+        #[arg(long, hide = true)]
+        from_reply: Option<PathBuf>,
     },
 }
 
@@ -43,10 +46,30 @@ async fn main() {
     let mut input = input::Input::new();
     let result = match cli.command {
         Command::Enroll { key } => enroll::run(key, &mut input).await,
-        Command::Trust { .. } => Err(anyhow::anyhow!("`ezcrypt trust` is not available yet")),
+        Command::Trust {
+            yes,
+            use_existing,
+            #[cfg(feature = "test-hooks")]
+            from_reply,
+        } => {
+            #[cfg(not(feature = "test-hooks"))]
+            let from_reply = None;
+            trust::command(yes, use_existing, from_reply, &mut input).await
+        }
     };
     if let Err(e) = result {
         eprintln!("Error: {e:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(all(test, not(feature = "test-hooks")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_reply_flag_absent_without_test_hooks() {
+        let r = Cli::try_parse_from(["ezcrypt", "trust", "--from-reply", "x"]);
+        assert!(r.is_err());
     }
 }

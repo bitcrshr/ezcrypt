@@ -10,7 +10,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
-use ssh_key::{Algorithm, PublicKey};
+use ezcrypt_core::certificate::parse_public;
+#[cfg(feature = "test-hooks")]
+use ezcrypt_link::Reply;
+use ezcrypt_link::{Kind, Payload, Request};
+use ssh_key::{Algorithm, HashAlg, PublicKey};
+
+use crate::enroll::{hostname, suggested_user};
+use crate::input::Input;
+use crate::session;
 
 const KEY_FILE: &str = "/etc/ssh/ezcrypt/trusted_user_ca_keys";
 const DROPIN_FILE: &str = "/etc/ssh/sshd_config.d/10-ezcrypt.conf";
@@ -428,6 +436,116 @@ fn append_existing(
         already_present: !added,
         added_include: false,
     })
+}
+
+/// Command entry: `ezcrypt trust`.
+pub async fn command(
+    yes: bool,
+    use_existing: bool,
+    from_reply: Option<PathBuf>,
+    input: &mut Input,
+) -> Result<()> {
+    if !cfg!(target_os = "linux") {
+        bail!("ezcrypt trust supports Linux servers only.");
+    }
+    if !is_root()? {
+        bail!("Run with sudo: sudo ezcrypt trust");
+    }
+    let host = hostname();
+    let (payload, received) = match from_reply {
+        Some(path) => (load_reply(&path)?, None),
+        None => {
+            let request = Request {
+                kind: Kind::Trust,
+                host: host.clone(),
+                user: suggested_user(),
+                subject: None,
+            };
+            let received = session::run(request, None, input).await?;
+            (received.payload().clone(), Some(received))
+        }
+    };
+    let result = confirm_and_install(&payload, &host, yes, use_existing, input).await;
+    let message = result
+        .as_ref()
+        .map(|(m, _)| m.clone())
+        .map_err(|e| anyhow!("{e:#}"));
+    if let Some(received) = received {
+        session::finish(received, &message).await;
+    }
+    let (message, name) = result?;
+    println!("{message}");
+    println!(
+        "Users can now log in with certificates from {name} whose principals match their account names."
+    );
+    Ok(())
+}
+
+fn is_root() -> Result<bool> {
+    let out = Command::new("id")
+        .arg("-u")
+        .output()
+        .context("cannot run id")?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim() == "0")
+}
+
+#[cfg(feature = "test-hooks")]
+fn load_reply(path: &Path) -> Result<Payload> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(Reply::from_text(text.trim())
+        .map_err(|e| anyhow!("{e}"))?
+        .payload)
+}
+
+#[cfg(not(feature = "test-hooks"))]
+fn load_reply(_: &Path) -> Result<Payload> {
+    bail!("--from-reply is not available in this build")
+}
+
+async fn confirm_and_install(
+    payload: &Payload,
+    host: &str,
+    yes: bool,
+    use_existing: bool,
+    input: &mut Input,
+) -> Result<(String, String)> {
+    let Payload::CaKey { public_key, name } = payload else {
+        bail!("the reply did not contain a CA key");
+    };
+    let key = parse_public(public_key)
+        .map_err(anyhow::Error::from_boxed)
+        .context("the CA key is not supported")?;
+    let fingerprint = key.fingerprint(HashAlg::Sha256);
+    println!("CA name: {name}");
+    println!("Fingerprint: {fingerprint}");
+    println!(
+        "{}",
+        fingerprint.to_randomart(&format!("{}", key.algorithm()))
+    );
+    if !yes {
+        let answer = input
+            .prompt(&format!("Trust this CA for user logins on {host}? [y/N] "))
+            .await
+            .unwrap_or_default();
+        if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+            bail!("Declined on {host}");
+        }
+    }
+    let line = key.to_openssh().context("cannot encode the CA key")?;
+    let report = install(Path::new("/"), &line, name, use_existing, &SystemSshd)?;
+    if report.already_present {
+        println!(
+            "Already trusted; no changes made ({}).",
+            report.key_file.display()
+        );
+    } else {
+        println!("Wrote {}.", report.key_file.display());
+    }
+    if report.added_include {
+        println!("Added an Include line to /etc/ssh/sshd_config.");
+    }
+    Ok((format!("Installed on {host}"), name.clone()))
 }
 
 #[cfg(test)]
