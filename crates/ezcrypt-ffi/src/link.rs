@@ -11,7 +11,8 @@ use std::sync::OnceLock;
 #[cfg(debug_assertions)]
 use std::time::Duration;
 
-use ezcrypt_core::{certificate, invalid, Result};
+use ezcrypt_core::certificate::{self, Purpose};
+use ezcrypt_core::{invalid, Result};
 use ezcrypt_link::{Kind, LinkError, Network, Offer, Outcome, Payload, Reply};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -32,15 +33,6 @@ const LOCAL_CONNECT_WAIT: Duration = Duration::from_secs(30);
 pub(crate) enum AppPayload {
     CaKey { public_key: String, name: String },
     Certificate { certificate: String },
-}
-
-impl From<AppPayload> for Payload {
-    fn from(payload: AppPayload) -> Payload {
-        match payload {
-            AppPayload::CaKey { public_key, name } => Payload::CaKey { public_key, name },
-            AppPayload::Certificate { certificate } => Payload::Certificate { certificate },
-        }
-    }
 }
 
 /// The `link_offer` op: what the app shows before the user confirms.
@@ -64,13 +56,47 @@ pub(crate) fn offer_info(url: &str) -> Result<Value> {
     Ok(info)
 }
 
-/// The listener refuses a payload of the wrong kind; refuse it here first.
-fn checked(offer: &Offer, payload: AppPayload) -> std::result::Result<Payload, LinkError> {
-    match (offer.kind, &payload) {
-        (Kind::Trust, AppPayload::CaKey { .. })
-        | (Kind::Enroll, AppPayload::Certificate { .. }) => Ok(payload.into()),
-        _ => Err(LinkError::WrongPayload),
-    }
+/// Only a CA public key or a user certificate for the offer's subject key may
+/// leave the device. Both are normalised to `<type> <base64>` so no free text
+/// rides along, and the receiver's checks (size, name) are applied here too.
+fn checked(offer: &Offer, payload: AppPayload) -> Result<Payload> {
+    let payload = match (offer.kind, payload) {
+        (Kind::Trust, AppPayload::CaKey { public_key, name }) => {
+            let mut key = certificate::parse_public(&public_key)?;
+            key.set_comment("");
+            Payload::CaKey {
+                public_key: key.to_openssh()?,
+                name,
+            }
+        }
+        (Kind::Enroll, AppPayload::Certificate { certificate }) => {
+            // `inspect` verifies the CA signature and, unlike ssh-key's
+            // `Certificate`, accepts forever certificates.
+            let inspected = certificate::inspect(&certificate)?;
+            if inspected.purpose != Purpose::User {
+                return Err(invalid("Only user certificates can be sent"));
+            }
+            if offer.subject.as_deref() != Some(inspected.subject.to_bytes()?.as_slice()) {
+                return Err(invalid(
+                    "This certificate is for a different key than the machine's",
+                ));
+            }
+            let mut fields = certificate.split_whitespace();
+            let (kind, body) = fields
+                .next()
+                .zip(fields.next())
+                .ok_or_else(|| invalid("Malformed certificate"))?;
+            Payload::Certificate {
+                certificate: format!("{kind} {body}"),
+            }
+        }
+        _ => return Err(LinkError::WrongPayload.into()),
+    };
+    let reply = Reply {
+        secret: offer.secret,
+        payload,
+    };
+    Ok(Reply::from_json(&reply.to_json())?.payload)
 }
 
 /// The `link_reply_text` op: the reply to paste when the network fails.
@@ -82,8 +108,6 @@ pub(crate) fn reply_text(url: &str, payload: AppPayload) -> Result<Value> {
         payload,
     }
     .to_text();
-    // Apply the receiver's checks (size, name) so the text will be accepted.
-    Reply::from_text(&text)?;
     Ok(json!({ "text": text }))
 }
 

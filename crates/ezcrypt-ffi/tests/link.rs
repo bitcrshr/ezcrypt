@@ -5,12 +5,14 @@ use std::future::Future;
 use std::ptr;
 use std::time::{Duration, Instant};
 
+use ezcrypt_core::certificate::{self, Purpose};
 use ezcrypt_ffi::{
     ezcrypt_call, ezcrypt_free, ezcrypt_link_cancel, ezcrypt_link_deliver, ezcrypt_link_free,
     ezcrypt_link_new, EzcryptLink,
 };
 use ezcrypt_link::{Kind, Listener, Network, Offer, Outcome, Payload, Reply, Request};
 use serde_json::{json, Value};
+use ssh_key::{rand_core::OsRng, Algorithm, PrivateKey};
 
 /// Known Ed25519 key; the fingerprint is what `ssh-keygen -lf` prints for it.
 const SUBJECT: &str =
@@ -107,6 +109,62 @@ fn ca_key() -> Payload {
         public_key: SUBJECT.into(),
         name: "Home CA".into(),
     }
+}
+
+fn certificate_json(certificate: &str) -> Value {
+    json!({"type": "certificate", "certificate": certificate})
+}
+
+/// A certificate for `subject` from a throwaway CA, with a trailing comment.
+fn issue(subject: &str, purpose: Purpose) -> String {
+    let ca = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
+    let request = certificate::Request {
+        public_key: subject.into(),
+        purpose,
+        key_id: "test".into(),
+        serial: "1".into(),
+        principals: vec![match purpose {
+            Purpose::User => "alice".into(),
+            Purpose::Host => "build.example.com".into(),
+        }],
+        all_principals: false,
+        valid_after: 1_700_000_000,
+        valid_before: None,
+        critical_options: Default::default(),
+        extensions: Default::default(),
+    };
+    certificate::issue(&request, purpose, &ca)
+        .unwrap()
+        .certificate
+}
+
+/// The certificate as it crosses the link: type and base64 only.
+fn without_comment(certificate: &str) -> String {
+    let fields: Vec<&str> = certificate.split_whitespace().collect();
+    assert_eq!(fields.len(), 3, "{certificate}");
+    format!("{} {}", fields[0], fields[1])
+}
+
+fn other_key() -> String {
+    PrivateKey::random(&mut OsRng, Algorithm::Ed25519)
+        .unwrap()
+        .public_key()
+        .to_openssh()
+        .unwrap()
+}
+
+fn reply_text(offer: &Offer, payload: Value) -> Value {
+    call(json!({"op": "link_reply_text", "url": offer.to_url(), "payload": payload}))
+}
+
+/// Deliver on a pre-cancelled handle: payload checks run first, so an
+/// accepted payload gives `Cancelled` without touching the network.
+fn deliver_checked(offer: &Offer, payload: Value) -> Value {
+    let link = Link::new();
+    link.cancel();
+    let out = link.deliver(&json!({"offer": offer.to_url(), "payload": payload}));
+    link.free();
+    out
 }
 
 /// An offer for an endpoint that is never dialed.
@@ -336,8 +394,10 @@ fn release_refuses_test_hooks() {
         json!({"offer": offer, "payload": ca_key_json(), "addr": addr}),
     ] {
         let out = link.deliver(&input);
-        assert!(out["error"].is_string(), "{out}");
-        assert_ne!(out["error"], "Cancelled");
+        assert_eq!(
+            out,
+            json!({"error": "Test delivery is not available in release builds"})
+        );
     }
     link.free();
 }
@@ -381,8 +441,7 @@ fn link_offer_op_reports_newer_version() {
 #[test]
 fn link_reply_text_op_round_trips() {
     let offer = offline_offer(Kind::Trust);
-    let out =
-        call(json!({"op": "link_reply_text", "url": offer.to_url(), "payload": ca_key_json()}));
+    let out = reply_text(&offer, ca_key_json());
     let text = out["ok"]["text"].as_str().expect("text");
     assert!(text.starts_with("ezcrypt1:"), "{text}");
     let reply = Reply::from_text(text).unwrap();
@@ -390,14 +449,14 @@ fn link_reply_text_op_round_trips() {
     assert_eq!(reply.payload, ca_key());
 
     let offer = offline_offer(Kind::Enroll);
-    let certificate =
-        json!({"type": "certificate", "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA"});
-    let out = call(json!({"op": "link_reply_text", "url": offer.to_url(), "payload": certificate}));
+    let certificate = issue(SUBJECT, Purpose::User);
+    let out = reply_text(&offer, certificate_json(&certificate));
     let reply = Reply::from_text(out["ok"]["text"].as_str().expect("text")).unwrap();
+    assert_eq!(reply.secret, offer.secret);
     assert_eq!(
         reply.payload,
         Payload::Certificate {
-            certificate: "ssh-ed25519-cert-v01@openssh.com AAAA".into()
+            certificate: without_comment(&certificate)
         }
     );
 }
@@ -407,11 +466,128 @@ fn link_reply_text_op_rejects_bad_payloads() {
     let offer = offline_offer(Kind::Trust).to_url();
     let mut extra = ca_key_json();
     extra["extra"] = json!(1);
-    let certificate =
-        json!({"type": "certificate", "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA"});
+    let certificate = certificate_json(&issue(SUBJECT, Purpose::User));
     let control = json!({"type": "ca_key", "public_key": SUBJECT, "name": "Home\nCA"});
     for payload in [extra, certificate, control] {
         let out = call(json!({"op": "link_reply_text", "url": offer, "payload": payload}));
         assert!(out["error"].is_string(), "{payload}: {out}");
     }
+}
+
+/// Payloads that must never leave the device, with the error each one gets
+/// (`None`: any error).
+fn rejected_payloads() -> Vec<(Kind, Value, Option<&'static str>)> {
+    vec![
+        (
+            Kind::Trust,
+            json!({"type": "ca_key", "public_key": "not a key", "name": "Home CA"}),
+            None,
+        ),
+        (
+            Kind::Trust,
+            json!({"type": "ca_key", "public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7 x", "name": "Home CA"}),
+            None,
+        ),
+        (
+            Kind::Trust,
+            json!({"type": "ca_key", "public_key": SUBJECT, "name": "Home\u{202e}CA"}),
+            None,
+        ),
+        (
+            Kind::Trust,
+            json!({"type": "ca_key", "public_key": SUBJECT, "name": ""}),
+            None,
+        ),
+        (Kind::Enroll, certificate_json("garbage"), None),
+        (
+            Kind::Enroll,
+            certificate_json("ssh-ed25519-cert-v01@openssh.com AAAA"),
+            None,
+        ),
+        (
+            Kind::Enroll,
+            certificate_json(&issue(SUBJECT, Purpose::Host)),
+            Some("Only user certificates can be sent"),
+        ),
+        (
+            Kind::Enroll,
+            certificate_json(&issue(&other_key(), Purpose::User)),
+            Some("This certificate is for a different key than the machine's"),
+        ),
+    ]
+}
+
+#[test]
+fn reply_text_refuses_invalid_payload_contents() {
+    for (kind, payload, message) in rejected_payloads() {
+        let out = reply_text(&offline_offer(kind), payload.clone());
+        let error = out["error"].as_str();
+        assert!(error.is_some(), "{payload}: {out}");
+        if let Some(message) = message {
+            assert_eq!(error, Some(message), "{payload}");
+        }
+    }
+}
+
+#[test]
+fn deliver_refuses_invalid_payload_contents() {
+    for (kind, payload, message) in rejected_payloads() {
+        let out = deliver_checked(&offline_offer(kind), payload.clone());
+        let error = out["error"].as_str();
+        assert!(error.is_some_and(|e| e != "Cancelled"), "{payload}: {out}");
+        if let Some(message) = message {
+            assert_eq!(error, Some(message), "{payload}");
+        }
+    }
+}
+
+#[test]
+fn deliver_accepts_valid_payloads() {
+    let certificate = certificate_json(&issue(SUBJECT, Purpose::User));
+    for (kind, payload) in [(Kind::Trust, ca_key_json()), (Kind::Enroll, certificate)] {
+        let out = deliver_checked(&offline_offer(kind), payload.clone());
+        assert_eq!(out, json!({"error": "Cancelled"}), "{payload}");
+    }
+}
+
+#[test]
+fn ca_key_is_normalised_without_comment() {
+    let commented = json!({"type": "ca_key", "public_key": format!("  {SUBJECT} laptop CA\n"), "name": "Home CA"});
+    let out = reply_text(&offline_offer(Kind::Trust), commented);
+    let reply = Reply::from_text(out["ok"]["text"].as_str().expect("text")).unwrap();
+    assert_eq!(reply.payload, ca_key());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ffi_delivers_certificate_to_local_listener() {
+    bounded(async {
+        let listener = bind(Kind::Enroll).await;
+        let certificate = issue(SUBJECT, Purpose::User);
+        let link = Link::new();
+        let dial = deliver_on_thread(link, local_input(&listener, certificate_json(&certificate)));
+        let serve = async {
+            let incoming = listener.next().await.expect("next");
+            let payload = incoming.payload.clone();
+            incoming
+                .respond(Outcome::Ok {
+                    message: "Installed".into(),
+                })
+                .await
+                .expect("respond");
+            payload
+        };
+        let (served, dialed) = tokio::join!(serve, dial);
+        link.free();
+        assert_eq!(
+            served,
+            Payload::Certificate {
+                certificate: without_comment(&certificate)
+            }
+        );
+        assert_eq!(
+            dialed,
+            json!({"ok": {"outcome": "ok", "message": "Installed"}})
+        );
+    })
+    .await;
 }
