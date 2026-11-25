@@ -8,7 +8,11 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ezcrypt", version, about = "Use your iPhone as an SSH certificate authority")]
+#[command(
+    name = "ezcrypt",
+    version,
+    about = "Use your iPhone as an SSH certificate authority"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

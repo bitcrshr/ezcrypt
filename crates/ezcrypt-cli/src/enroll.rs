@@ -25,8 +25,8 @@ fn choice_for(private: &Path) -> Result<KeyChoice> {
     let mut public = private.as_os_str().to_owned();
     public.push(".pub");
     let public = PathBuf::from(public);
-    let text = fs::read_to_string(&public)
-        .with_context(|| format!("cannot read {}", public.display()))?;
+    let text =
+        fs::read_to_string(&public).with_context(|| format!("cannot read {}", public.display()))?;
     let key = parse_public(text.trim())
         .map_err(anyhow::Error::from_boxed)
         .with_context(|| format!("{} is not a supported key", public.display()))?;
@@ -51,8 +51,17 @@ pub fn find_key(ssh_dir: &Path, explicit: Option<&Path>) -> Result<Option<KeyCho
     }
     for name in CANDIDATES {
         let private = ssh_dir.join(name);
-        if let Ok(choice) = choice_for(&private) {
-            return Ok(Some(choice));
+        if private.exists() || private.with_file_name(format!("{name}.pub")).exists() {
+            return choice_for(&private)
+                .map(Some)
+                .with_context(|| {
+                    format!(
+                        "found {} but cannot use its public key; recreate it with `ssh-keygen -y -f {} > {}.pub`",
+                        private.display(),
+                        private.display(),
+                        private.display()
+                    )
+                });
         }
     }
     Ok(None)
@@ -86,15 +95,16 @@ pub fn write_certificate(path: &Path, certificate: &str) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        file.as_file().set_permissions(fs::Permissions::from_mode(0o644))?;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o644))?;
     }
     file.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
 
 fn home() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var)
         .map(PathBuf::from)
         .context("cannot find your home directory")
 }
@@ -145,7 +155,11 @@ fn format_time(seconds: u64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02} {:02}:{:02} UTC", rem / 3600, rem % 3600 / 60)
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rem / 3600,
+        rem % 3600 / 60
+    )
 }
 
 fn install(key: &KeyChoice, payload: &Payload) -> Result<(String, Inspected)> {
@@ -177,7 +191,10 @@ pub async fn run(explicit: Option<PathBuf>, input: &mut Input) -> Result<()> {
     let fingerprint = format!("Key {}", parsed.fingerprint(HashAlg::Sha256));
     let received = session::run(request, Some(fingerprint), input).await?;
     let result = install(&key, received.payload());
-    let message = result.as_ref().map(|(m, _)| m.clone()).map_err(|e| anyhow::anyhow!("{e:#}"));
+    let message = result
+        .as_ref()
+        .map(|(m, _)| m.clone())
+        .map_err(|e| anyhow::anyhow!("{e:#}"));
     session::finish(received, &message).await;
     let (message, inspected) = result?;
     println!("{message}");
@@ -225,7 +242,9 @@ mod tests {
             critical_options: BTreeMap::new(),
             extensions: BTreeMap::new(),
         };
-        certificate::issue(&request, purpose, ca).unwrap().certificate
+        certificate::issue(&request, purpose, ca)
+            .unwrap()
+            .certificate
     }
 
     fn choice(dir: &std::path::Path, key: &PrivateKey) -> KeyChoice {
@@ -249,6 +268,14 @@ mod tests {
 
         let explicit = rsa.path().join("id_rsa");
         assert!(find_key(rsa.path(), Some(&explicit)).is_err());
+    }
+
+    #[test]
+    fn existing_private_key_without_pub_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("id_ed25519"), "private").unwrap();
+        let e = find_key(dir.path(), None).err().unwrap();
+        assert!(format!("{e:#}").contains("id_ed25519"));
     }
 
     #[test]

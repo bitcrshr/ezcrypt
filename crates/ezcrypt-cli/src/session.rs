@@ -122,7 +122,9 @@ pub async fn run(
         println!("{fingerprint}");
     }
     if cfg!(windows) {
-        println!("If the code doesn't display, use Windows Terminal, or open this link on your phone:");
+        println!(
+            "If the code doesn't display, use Windows Terminal, or open this link on your phone:"
+        );
     } else {
         println!("Or open this link on your phone:");
     }
@@ -173,8 +175,12 @@ pub async fn finish(received: Received, result: &Result<String>) {
     match received {
         Received::Network(incoming, listener) => {
             let outcome = match result {
-                Ok(message) => Outcome::Ok { message: message.clone() },
-                Err(e) => Outcome::Error { message: format!("{e:#}") },
+                Ok(message) => Outcome::Ok {
+                    message: message.clone(),
+                },
+                Err(e) => Outcome::Error {
+                    message: format!("{e:#}"),
+                },
             };
             if let Err(e) = incoming.respond(outcome).await {
                 eprintln!("Could not tell the phone the result: {e}");
@@ -190,7 +196,9 @@ mod tests {
     use super::*;
 
     fn payload() -> Payload {
-        Payload::Certificate { certificate: "c".into() }
+        Payload::Certificate {
+            certificate: "c".into(),
+        }
     }
 
     fn accept(text: &str) -> Result<Payload, LinkError> {
@@ -212,7 +220,10 @@ mod tests {
     #[test]
     fn accepts_single_line_with_whitespace() {
         let mut p = PasteAccumulator::default();
-        assert_eq!(p.push("  ezcrypt1:abcdef \r", accept), Paste::Done(payload()));
+        assert_eq!(
+            p.push("  ezcrypt1:abcdef \r", accept),
+            Paste::Done(payload())
+        );
     }
 
     #[test]
@@ -238,7 +249,10 @@ mod tests {
     #[test]
     fn wrong_secret_fails_immediately_and_resets() {
         let mut p = PasteAccumulator::default();
-        assert_eq!(p.push("ezcrypt1:wrong", accept), Paste::Failed(LinkError::WrongSecret));
+        assert_eq!(
+            p.push("ezcrypt1:wrong", accept),
+            Paste::Failed(LinkError::WrongSecret)
+        );
         assert_eq!(p.push("ezcrypt1:abcdef", accept), Paste::Done(payload()));
     }
 

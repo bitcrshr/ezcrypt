@@ -48,7 +48,11 @@ mod tests {
         let plain = strip_ansi(&rendered);
         assert!(plain.lines().count() > 10);
         for line in plain.lines() {
-            assert!(line.chars().count() <= 80, "{} columns", line.chars().count());
+            assert!(
+                line.chars().count() <= 80,
+                "{} columns",
+                line.chars().count()
+            );
         }
     }
 }
