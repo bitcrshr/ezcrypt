@@ -1,12 +1,13 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 use crate::offer::check_text;
 use crate::{LinkError, VERSION};
 
 const PREFIX: &str = "ezcrypt1:";
-const MAX_JSON: usize = 64 * 1024;
+pub(crate) const MAX_JSON: usize = 64 * 1024;
 const MAX_NAME: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,11 +17,29 @@ pub enum Payload {
     Certificate { certificate: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Reply {
     pub secret: [u8; 16],
     pub payload: Payload,
 }
+
+impl std::fmt::Debug for Reply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reply")
+            .field("secret", &"<redacted>")
+            .field("payload", &self.payload)
+            .finish()
+    }
+}
+
+impl PartialEq for Reply {
+    fn eq(&self, other: &Self) -> bool {
+        let secret: bool = self.secret.ct_eq(&other.secret).into();
+        secret && self.payload == other.payload
+    }
+}
+
+impl Eq for Reply {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -47,13 +66,17 @@ fn malformed(msg: &str) -> LinkError {
 
 impl Reply {
     pub fn to_text(&self) -> String {
+        format!("{PREFIX}{}", B64.encode(self.to_json()))
+    }
+
+    /// The reply JSON, as sent over the network and wrapped by `to_text`.
+    pub fn to_json(&self) -> Vec<u8> {
         let wire = Wire {
             v: VERSION,
             secret: B64.encode(self.secret),
             payload: self.payload.clone(),
         };
-        let json = serde_json::to_vec(&wire).expect("reply serializes");
-        format!("{PREFIX}{}", B64.encode(json))
+        serde_json::to_vec(&wire).expect("reply serializes")
     }
 
     pub fn from_text(text: &str) -> Result<Reply, LinkError> {

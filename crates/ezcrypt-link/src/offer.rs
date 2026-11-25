@@ -1,6 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use iroh::EndpointId;
+use subtle::ConstantTimeEq;
 use url::Url;
 
 use crate::{LinkError, VERSION};
@@ -25,7 +26,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Offer {
     pub kind: Kind,
     pub endpoint: EndpointId,
@@ -35,6 +36,33 @@ pub struct Offer {
     /// SSH wire public-key blob; required for Enroll, absent for Trust.
     pub subject: Option<Vec<u8>>,
 }
+
+impl std::fmt::Debug for Offer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Offer")
+            .field("kind", &self.kind)
+            .field("endpoint", &self.endpoint)
+            .field("secret", &"<redacted>")
+            .field("host", &self.host)
+            .field("user", &self.user)
+            .field("subject", &self.subject)
+            .finish()
+    }
+}
+
+impl PartialEq for Offer {
+    fn eq(&self, other: &Self) -> bool {
+        let secret: bool = self.secret.ct_eq(&other.secret).into();
+        secret
+            && self.kind == other.kind
+            && self.endpoint == other.endpoint
+            && self.host == other.host
+            && self.user == other.user
+            && self.subject == other.subject
+    }
+}
+
+impl Eq for Offer {}
 
 fn malformed(msg: &str) -> LinkError {
     LinkError::Malformed(msg.to_string())
@@ -58,6 +86,27 @@ pub(crate) fn check_text(name: &str, value: &str, max: usize) -> Result<(), Link
         )));
     }
     Ok(())
+}
+
+/// The checks on an offer's host, user and subject, shared by `Offer::from_url`
+/// and `Listener::bind` so the URL a listener shows always parses.
+pub(crate) fn check_fields(
+    kind: Kind,
+    host: &str,
+    user: &str,
+    subject: Option<&[u8]>,
+) -> Result<(), LinkError> {
+    check_text("host", host, MAX_HOST)?;
+    check_text("user", user, MAX_USER)?;
+    match (kind, subject) {
+        (Kind::Trust, None) => Ok(()),
+        (Kind::Trust, Some(_)) => Err(malformed("trust offer must not have a subject")),
+        (Kind::Enroll, None) => Err(malformed("enroll offer is missing its subject")),
+        (Kind::Enroll, Some(s)) if s.is_empty() || s.len() > MAX_SUBJECT => {
+            Err(malformed("subject has a bad size"))
+        }
+        (Kind::Enroll, Some(_)) => Ok(()),
+    }
 }
 
 impl Offer {
@@ -133,22 +182,12 @@ impl Offer {
             .and_then(|b| b.try_into().ok())
             .ok_or_else(|| malformed("bad secret"))?;
         let host = h.ok_or_else(|| missing("h"))?;
-        check_text("host", &host, MAX_HOST)?;
         let user = u.ok_or_else(|| missing("u"))?;
-        check_text("user", &user, MAX_USER)?;
-
-        let subject = match (kind, p) {
-            (Kind::Trust, None) => None,
-            (Kind::Trust, Some(_)) => return Err(malformed("trust offer must not have a subject")),
-            (Kind::Enroll, None) => return Err(missing("p")),
-            (Kind::Enroll, Some(p)) => {
-                let bytes = B64.decode(p).map_err(|_| malformed("bad subject"))?;
-                if bytes.is_empty() || bytes.len() > MAX_SUBJECT {
-                    return Err(malformed("subject has a bad size"));
-                }
-                Some(bytes)
-            }
+        let subject = match p {
+            Some(p) => Some(B64.decode(p).map_err(|_| malformed("bad subject"))?),
+            None => None,
         };
+        check_fields(kind, &host, &user, subject.as_deref())?;
 
         Ok(Offer {
             kind,

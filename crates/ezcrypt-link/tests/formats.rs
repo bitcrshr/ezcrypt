@@ -251,3 +251,35 @@ fn error_display() {
         "The terminal session has ended. Run the command again."
     );
 }
+
+#[test]
+fn debug_redacts_secrets() {
+    let o = offer(Kind::Enroll);
+    let shown = format!("{o:?}");
+    assert!(shown.contains("redacted"), "{shown}");
+    assert!(!shown.contains("[9, 9"), "{shown}");
+    assert!(shown.contains("example.com"), "{shown}");
+    for r in replies() {
+        let shown = format!("{r:?}");
+        assert!(shown.contains("redacted"), "{shown}");
+        assert!(!shown.contains(&format!("{:?}", r.secret)), "{shown}");
+        assert!(
+            !shown.contains("[3, 3") && !shown.contains("[4, 4"),
+            "{shown}"
+        );
+    }
+}
+
+#[test]
+fn equality_still_compares_secrets() {
+    let a = offer(Kind::Trust);
+    let mut b = a.clone();
+    assert_eq!(a, b);
+    b.secret[15] ^= 1;
+    assert_ne!(a, b);
+    let r = replies()[0].clone();
+    let mut r2 = r.clone();
+    assert_eq!(r, r2);
+    r2.secret[0] ^= 1;
+    assert_ne!(r, r2);
+}
