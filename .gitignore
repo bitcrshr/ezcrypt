@@ -5,3 +5,4 @@ target/
 *.xcuserstate
 xcuserdata/
 .xcodebuildmcp/
+ios/Config/Signing.local.xcconfig

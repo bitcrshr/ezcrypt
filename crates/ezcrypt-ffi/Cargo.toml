@@ -3,6 +3,7 @@ name = "ezcrypt-ffi"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT"
 
 [lib]
 # rlib lets the integration tests call the extern "C" functions.

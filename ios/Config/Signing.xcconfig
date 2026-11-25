@@ -1,0 +1,2 @@
+// Signing team comes from an untracked local file; see README.
+#include? "Signing.local.xcconfig"

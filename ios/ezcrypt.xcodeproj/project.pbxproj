@@ -41,6 +41,7 @@
 		B00000000000000000000003 /* ezcryptUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ezcryptUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000004 /* ezcryptMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = ezcryptMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000005 /* ezcryptMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ezcryptMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B90000000000000000000003 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -93,6 +94,7 @@
 			isa = PBXGroup;
 			children = (
 				B90000000000000000000002 /* InventoryLifecycleTests.swift */,
+				B90000000000000000000003 /* Signing.xcconfig */,
 				A00000000000000000000002 /* ezcrypt */,
 				A00000000000000000000003 /* ezcryptTests */,
 				A00000000000000000000006 /* ezcryptMacTests */,
@@ -424,6 +426,7 @@
 		};
 		C10000000000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B90000000000000000000003 /* Signing.xcconfig */;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -482,6 +485,7 @@
 		};
 		C10000000000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B90000000000000000000003 /* Signing.xcconfig */;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -637,6 +641,7 @@
 		};
 		C40000000000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B90000000000000000000003 /* Signing.xcconfig */;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = MacAppIcon;
@@ -646,7 +651,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
@@ -694,6 +698,7 @@
 		};
 		C40000000000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B90000000000000000000003 /* Signing.xcconfig */;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = MacAppIcon;
@@ -703,7 +708,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = NO;

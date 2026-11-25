@@ -1,91 +1,155 @@
 # ezcrypt
 
-A local iPhone, iPad, and native Mac SSH certificate authority toolkit. Create any number of host or user
-CAs, issue and inspect certificates, and export portable encrypted software keys.
+Use your iPhone as a hardware SSH certificate authority. CA keys live in the
+Secure Enclave (or are wrapped by it), and every signature requires Face ID,
+Touch ID, or the device passcode. ezcrypt also runs natively on Apple silicon Macs.
+
+A command-line tool removes the manual work around signing: one command on a
+server or client prints a QR code, you scan it with the phone, approve, and the
+CA public key or signed certificate is installed for you.
+
+## Features
 
 - **Hardware CAs:** P-256 keys generated in the Secure Enclave, non-exportable.
-- **Software CAs:** Ed25519, P-256, P-384, or P-521; encrypted with a per-CA
+- **Software CAs:** Ed25519, P-256, P-384, or P-521, encrypted with a per-CA
   Secure Enclave key. Plaintext CA keys are handled only in Rust.
-- Face ID, Touch ID, or device passcode gates sensitive operations.
-- Principals, key ID, 64-bit serials, scheduled/finite/**forever** validity,
+- Principals, key ID, 64-bit serials, scheduled, finite or forever validity,
   PTY/forwarding/user-rc permissions, force-command, and source CIDRs.
-- Sign Ed25519, ECDSA, and FIDO2 SSH public keys (`ed25519-sk` / `ecdsa-sk`),
-  including resident keys, through the same paste or file-import flow.
-- Searchable certificate inventory, duplicate/overlap warnings, and exact
+- Signs Ed25519, ECDSA, and FIDO2 (`ed25519-sk` / `ecdsa-sk`) SSH public keys.
+- Searchable certificate inventory, duplicate and overlap warnings, and exact
   certificate redelivery without another signature.
 - Each CA shows its fingerprint as OpenSSH randomart, identical to
-  `ssh-keygen -lv -f ca.pub`, for quick visual verification on a computer.
+  `ssh-keygen -lv -f ca.pub`.
 - Encrypted OpenSSH private-key export with a passphrase, or GPG encryption to
-  a supplied OpenPGP public key. Neither recovery path requires ezcrypt.
+  an OpenPGP public key. Neither recovery path requires ezcrypt.
+
+## Install the CLI
+
+The `ezcrypt` CLI runs `trust` on Linux servers and `enroll` on Linux, macOS,
+and Windows clients. Release binaries and installers are published with the
+first tag; until then, build from source (below).
+
+```sh
+# Linux and macOS
+curl -fsSL https://github.com/bitcrshr/ezcrypt/releases/latest/download/install.sh | sh
+
+# Windows (PowerShell)
+irm https://github.com/bitcrshr/ezcrypt/releases/latest/download/install.ps1 | iex
+
+# Nix
+nix run github:bitcrshr/ezcrypt
+```
+
+From source, with the pinned Rust toolchain: `cargo install --locked --path crates/ezcrypt-cli`.
+
+## Quickstart
+
+Install the app on your iPhone (see [Build the app](#build-the-app)) and create a
+user CA.
+
+**Trust a CA on a server.** Run on the server:
+
+```sh
+sudo ezcrypt trust
+```
+
+It prints a QR code and the same payload as text. Scan it with the Camera or the
+app's Scan action, choose which user CA to send, and tap Send. ezcrypt writes and
+validates an `sshd` configuration for `TrustedUserCAKeys`, then asks you to
+confirm at the terminal.
+
+**Get a certificate on a client.** Run on the machine that holds the SSH key:
+
+```sh
+ezcrypt enroll
+```
+
+Scan the QR code, check that the key fingerprint matches the one in the terminal,
+review the certificate in the usual signing screen, and approve with Face ID. The
+certificate is saved next to the key as `<key-name>-cert.pub`, where `ssh` finds it
+automatically.
+
+Only public keys and certificates cross the link. CA private keys never leave the
+phone, and the CLI never signs. Each session uses a fresh QR code carrying a
+one-time secret and expires after 10 minutes. If the phone cannot reach the machine,
+the app copies a one-line reply you can paste into the waiting CLI. See the
+[design](docs/superpowers/specs/2026-11-24-distribution-design.md) for the protocol.
+
+## Build the app
+
+Requires macOS, Xcode 26 or newer, [rustup](https://rustup.rs), and
+[Just](https://github.com/casey/just). Rust 1.94.0 is pinned in
+`rust-toolchain.toml`. OpenSSH and GnuPG are needed for the core interoperability
+tests. The iOS deployment target is 26.0.
+
+```sh
+just bootstrap     # Rust Apple targets and locked dependencies
+just test-core     # Rust tests, clippy, rustfmt
+just build-ios     # Simulator build
+just test-ios      # Swift integration and UI tests
+just check-device  # unsigned Release build for iOS devices
+just build-mac     # native Mac build
+just test-trust    # end-to-end `ezcrypt trust` against sshd in a container (Docker)
+just xcode         # open the project
+```
+
+The Xcode targets build their Rust library automatically.
+
+**Signing.** No team ID is committed. `ios/Config/Signing.xcconfig` optionally
+includes an untracked `ios/Config/Signing.local.xcconfig`. To run on a device,
+create it with your Apple development team:
+
+```
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+```
+
+The Mac target also needs a development profile that authorizes its app-specific
+Keychain access group, so the Mac must be registered with that team.
+
+The Simulator has no Secure Enclave. For interactive development, add `--demo` to
+Xcode's Run arguments (Debug, Simulator only). This enables isolated disposable
+Keychain keys and a **SIMULATOR - TEST KEYS** banner. Device and Release builds cannot
+use the demo backend, and no fixture CA or plaintext private key ships with the app.
+
+`just test-mac` uses ad-hoc signing and `ezcryptMac-local.entitlements`, which lack
+the Keychain entitlement, so it covers filesystem and model tests only. `just check-mac`
+compiles Release without signing. Neither proves Secure Enclave behavior.
+
+## Security model
+
+- Swift owns screens, the public inventory, Keychain references, and authentication.
+  Rust owns software CA generation, serialization, encryption, signatures, and
+  exports. There is no plaintext CA export operation in the app bridge.
+- Hardware CAs use non-exportable Secure Enclave P-256 keys with user presence required
+  on each use. Software CAs are sealed in an AES-256-GCM envelope keyed by ECDH with a
+  per-CA Secure Enclave key.
+- The distribution link carries only public keys and certificates, requires a
+  one-time secret from the QR code, and runs only while a session sheet is open.
+- Deleting a key or certificate does not revoke certificates already issued.
+
+Read [custody and formats](docs/architecture.md) for the full model.
+
+## Status
+
+The Rust core, CLI, and app have automated test coverage, described in
+[validation](docs/validation.md). The interactive device validation checklist in that
+document, covering Secure Enclave signing, authentication, and Mac key operations,
+is still pending. Treat ezcrypt as pre-release and use disposable CAs until it is done.
+iCloud inventory sync and cross-device signing are not implemented, and the local
+inventory JSON must not be uploaded as a sync format. Mac inventories are separate
+from iOS inventories.
 
 ## Workspace
 
 ```
-ios/                 Shared SwiftUI app, iOS/Mac targets, Apple bridge, Swift/UI tests
-crates/ezcrypt-core/  Portable Rust certificate, custody, and export core
-docs/                Custody/format design and validation record
-.scratch/            Ignored working notes
-.build/              Ignored dependencies, build products, disposable test keys
+crates/ezcrypt-core/  Certificates, custody, and exports; portable and network-free
+crates/ezcrypt-ffi/   Static C bridge linked into the app
+crates/ezcrypt-link/  QR offers and replies, and the Iroh session
+crates/ezcrypt-cli/   The ezcrypt binary: trust and enroll
+ios/                  SwiftUI app, iOS and Mac targets, Swift and UI tests
+tests/trust/          Container end-to-end test for `ezcrypt trust`
+docs/                 Architecture, validation, and design records
 ```
-
-Requires macOS, Xcode 26+, rustup, and Just. Rust 1.94.0 is pinned in
-`rust-toolchain.toml`. OpenSSH and GnuPG are required for core
-interoperability tests. iOS deployment target is 26.0. Builds currently target
-Apple silicon simulators, arm64 iOS devices, and Apple silicon Macs on macOS 26+.
-
-```
-just bootstrap
-just test-core
-just build-ios
-just test-ios
-just xcode
-```
-
-The Xcode target builds its Rust library automatically. Pick your development
-team in Xcode before running on an iPhone. No signing identity is committed.
-
-Simulator has no Secure Enclave. For interactive development, add `--demo` to
-Xcode's Run arguments (Debug, Simulator only). This enables isolated disposable
-Keychain keys and an explicit **SIMULATOR · TEST KEYS** banner. A normal Simulator
-launch refuses hardware operations; device/Release builds cannot use the demo
-backend. Test hosts use the equally restricted `EZCRYPT_TEST_MODE=1` switch.
-No fixture CA or plaintext private key ships with the app.
-
-## Native Mac app
-
-Open `ios/ezcrypt.xcodeproj`, choose the **ezcryptMac** scheme and **My Mac**.
-Select your Apple development team in Signing & Capabilities. The Mac target
-requires a development profile authorizing its app-specific Keychain access group;
-the Mac must be registered with that team. No team or signing identity is committed.
-
-```sh
-just build-mac DEVELOPMENT_TEAM=YOUR_TEAM_ID
-just test-mac
-just check-mac
-```
-
-The Mac app shares its Rust core, models, inventory store, cryptographic bridge,
-detail screens, and creation/signing/export forms with iOS. It adds a resizable
-three-column browser, search and certificate filters, File → New Authority (⌘N),
-Mac clipboard handling, and native Save panels for certificates and encrypted backups.
-It has a single inventory window and uses App Sandbox with user-selected file access.
-
-`test-mac` uses local ad-hoc signing and `ezcryptMac-local.entitlements` for
-filesystem/model tests and UI inspection only. That build lacks the Keychain
-entitlement needed for real key operations. `build-mac` uses the full entitlements;
-`check-mac` compiles Release without signing. Neither local signing nor a successful
-build proves Secure Enclave or authentication behavior. The Simulator software-key
-backend remains unavailable on Mac, including Debug builds.
-
-Inventories are currently separate on every device. Mac key creation, lookup, and
-delete explicitly select the data-protection Keychain, preserving hardware-only
-key custody and the existing user-presence policy. Interactive Mac hardware
-validation is still required; see [validation](docs/validation.md).
-
-The next phases are iCloud inventory sync **without CA private keys**, followed by
-explicit authorization of another device to sign for a software CA. Neither is
-implemented in this phase. The local JSON currently includes device-wrapped
-software-key envelopes and must not simply be uploaded as the future sync format.
 
 ## Organizing the inventory
 
@@ -147,3 +211,7 @@ issued. Secure Enclave CAs have no portable private-key backup.
 
 Read [custody and formats](docs/architecture.md) and
 [validation and remaining device checks](docs/validation.md) before using real CAs.
+
+## License
+
+[MIT](LICENSE)
