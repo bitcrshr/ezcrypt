@@ -20,6 +20,14 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod link;
+pub use link::{
+    ezcrypt_link_cancel, ezcrypt_link_deliver, ezcrypt_link_free, ezcrypt_link_new, EzcryptLink,
+};
+
+/// Largest JSON request accepted at the C boundary.
+const MAX_INPUT: usize = 1024 * 1024;
+
 type Callback = unsafe extern "C" fn(*mut c_void, u32, *const u8, usize, *mut u8, usize) -> i32;
 
 #[derive(Deserialize)]
@@ -59,6 +67,13 @@ enum Command {
         format: String,
         armor: String,
         fingerprint: String,
+    },
+    LinkOffer {
+        url: String,
+    },
+    LinkReplyText {
+        url: String,
+        payload: link::AppPayload,
     },
 }
 
@@ -223,7 +238,16 @@ fn dispatch(
                 },
             )
         }
+        Command::LinkOffer { url } => link::offer_info(&url),
+        Command::LinkReplyText { url, payload } => link::reply_text(&url, payload),
     }
+}
+
+/// Hand a JSON response to C; free it with `ezcrypt_free`.
+fn respond(response: Value) -> *mut c_char {
+    CString::new(response.to_string())
+        .expect("JSON escapes nul")
+        .into_raw()
 }
 
 /// # Safety
@@ -241,7 +265,7 @@ pub unsafe extern "C" fn ezcrypt_call(
 ) -> *mut c_char {
     let result = std::panic::catch_unwind(|| -> Result<Value> {
         if input.is_null()
-            || len > 1024 * 1024
+            || len > MAX_INPUT
             || secret_len > 16_384
             || (secret.is_null() && secret_len != 0)
         {
@@ -260,12 +284,10 @@ pub unsafe extern "C" fn ezcrypt_call(
         Ok(Err(error)) => json!({"error": error.to_string()}),
         Err(_) => json!({"error": "Cryptographic operation failed"}),
     };
-    CString::new(response.to_string())
-        .expect("JSON escapes nul")
-        .into_raw()
+    respond(response)
 }
 /// # Safety
-/// pointer must be returned by ezcrypt_call and not previously freed.
+/// pointer must be returned by ezcrypt_call or ezcrypt_link_deliver and not previously freed.
 #[no_mangle]
 pub unsafe extern "C" fn ezcrypt_free(pointer: *mut c_char) {
     if !pointer.is_null() {

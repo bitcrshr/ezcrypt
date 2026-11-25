@@ -1168,11 +1168,15 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ezcrypt-core",
+ "ezcrypt-link",
+ "iroh",
  "p256",
  "serde",
  "serde_json",
  "signature 2.2.0",
  "ssh-key",
+ "tokio",
+ "tokio-util",
  "zeroize",
 ]
 

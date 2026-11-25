@@ -455,6 +455,13 @@
 					"-lezcrypt_ffi",
 					"-framework",
 					Security,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Network,
+					"-lresolv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.ezcrypt.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -500,6 +507,13 @@
 					"-lezcrypt_ffi",
 					"-framework",
 					Security,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Network,
+					"-lresolv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.ezcrypt.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -650,6 +664,13 @@
 					"-lezcrypt_ffi",
 					"-framework",
 					Security,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Network,
+					"-lresolv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.ezcrypt.mac;
 				PRODUCT_MODULE_NAME = ezcrypt;
@@ -697,6 +718,13 @@
 					"-lezcrypt_ffi",
 					"-framework",
 					Security,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Network,
+					"-lresolv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.ezcrypt.mac;
 				PRODUCT_MODULE_NAME = ezcrypt;
