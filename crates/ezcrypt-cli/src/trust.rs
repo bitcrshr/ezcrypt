@@ -13,7 +13,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use ssh_key::{Algorithm, PublicKey};
 
 const KEY_FILE: &str = "/etc/ssh/ezcrypt/trusted_user_ca_keys";
-const DROPIN_FILE: &str = "/etc/ssh/sshd_config.d/50-ezcrypt.conf";
+const DROPIN_FILE: &str = "/etc/ssh/sshd_config.d/10-ezcrypt.conf";
 const SSHD_CONFIG: &str = "/etc/ssh/sshd_config";
 const INCLUDE_LINE: &str = "Include /etc/ssh/sshd_config.d/*.conf";
 
@@ -116,12 +116,27 @@ pub struct Report {
     pub added_include: bool,
 }
 
-fn under(root: &Path, abs: &str) -> PathBuf {
-    match abs.strip_prefix('/') {
-        Some(rel) => root.join(rel),
-        // sshd resolves relative paths against /etc/ssh.
-        None => root.join("etc/ssh").join(abs),
+/// Joins an absolute path under `root`. Rejects relative paths and anything
+/// that is not purely normal components (`..`, `.`), so it cannot escape `root`.
+fn under(root: &Path, abs: &str) -> Result<PathBuf> {
+    let p = Path::new(abs);
+    let mut comps = p.components();
+    if comps.next() != Some(std::path::Component::RootDir)
+        || !comps.all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        bail!("sshd reported an unusable TrustedUserCAKeys path: {abs}");
     }
+    Ok(root.join(abs.trim_start_matches('/')))
+}
+
+fn refuse_symlink(path: &Path, what: &str) -> Result<()> {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!(
+            "{} ({what}) is a symlink; refusing to replace it. Resolve it manually and rerun.",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Atomic write: temp file in the same directory, then rename. Keeps the mode
@@ -286,7 +301,7 @@ pub fn install(
     let mut key = parse_ca(ca_line)?;
     key.set_comment(ca_name);
     let line = key.to_openssh().context("formatting CA key")?;
-    let config_path = under(root, SSHD_CONFIG);
+    let config_path = under(root, SSHD_CONFIG)?;
     if !config_path.is_file() {
         bail!("{SSHD_CONFIG} not found; is OpenSSH server installed?");
     }
@@ -316,8 +331,8 @@ fn run(
     use_existing: bool,
     sshd: &dyn Sshd,
 ) -> Result<Report> {
-    let key_path = under(root, KEY_FILE);
-    let config_path = under(root, SSHD_CONFIG);
+    let key_path = under(root, KEY_FILE)?;
+    let config_path = under(root, SSHD_CONFIG)?;
 
     // Read the effective setting before writing anything: an existing
     // TrustedUserCAKeys elsewhere would otherwise be overridden by our drop-in.
@@ -329,6 +344,8 @@ fn run(
         return append_existing(txn, root, existing, line, key, sshd);
     }
 
+    refuse_symlink(&key_path, "our CA key file")?;
+    refuse_symlink(&under(root, DROPIN_FILE)?, "our sshd drop-in")?;
     let config = fs::read(&config_path).with_context(|| format!("reading {SSHD_CONFIG}"))?;
     let added_include = !has_include(&String::from_utf8_lossy(&config));
     if added_include
@@ -345,7 +362,7 @@ fn run(
     let added_key = append_key(txn, &key_path, line, key)?;
 
     let dropin = format!("TrustedUserCAKeys {KEY_FILE}\n");
-    let dropin_path = under(root, DROPIN_FILE);
+    let dropin_path = under(root, DROPIN_FILE)?;
     if read_opt(&dropin_path)?.as_deref() != Some(dropin.as_bytes()) {
         txn.ensure_dir(dropin_path.parent().context("no parent")?)?;
         txn.write(&dropin_path, dropin.as_bytes())?;
@@ -369,17 +386,9 @@ fn run(
         });
     }
 
-    let existing = match (&effective, use_existing) {
-        (Some(p), true) => p.clone(),
-        _ => bail!("{}", shadow_message(effective.as_deref())),
-    };
-
-    // Put back our key file, drop-in and Include, then use the existing file.
-    let failures = txn.restore();
-    if !failures.is_empty() {
-        bail!("could not undo changes: {}", failures.join("; "));
-    }
-    append_existing(txn, root, &existing, line, key, sshd)
+    // Something other than our file wins even after our change (for example an
+    // earlier drop-in). Appending elsewhere would be wrong, so undo everything.
+    bail!("{}", shadow_message(effective.as_deref()))
 }
 
 fn shadow_message(effective: Option<&str>) -> String {
@@ -397,7 +406,20 @@ fn append_existing(
     key: &PublicKey,
     sshd: &dyn Sshd,
 ) -> Result<Report> {
-    let target = under(root, existing);
+    let target = under(root, existing)?;
+    match fs::symlink_metadata(&target) {
+        Ok(m) if m.file_type().is_file() => {}
+        Ok(m) if m.file_type().is_symlink() => {
+            refuse_symlink(&target, "the existing TrustedUserCAKeys file")?
+        }
+        Ok(_) => bail!("{} is not a regular file", target.display()),
+        Err(e) => {
+            return Err(anyhow!(e).context(format!(
+                "the existing TrustedUserCAKeys file {} cannot be read",
+                target.display()
+            )));
+        }
+    }
     let added = append_key(txn, &target, line, key)?;
     sshd.test().context("validating sshd configuration")?;
     sshd.reload()?;
@@ -422,7 +444,8 @@ mod tests {
 
     struct FakeSshd {
         calls: RefCell<Vec<&'static str>>,
-        effective: Option<String>,
+        effective: Vec<Option<String>>,
+        next: Cell<usize>,
         test_fails: Cell<bool>,
         reload_fails: bool,
     }
@@ -431,7 +454,8 @@ mod tests {
         fn new(effective: Option<&str>) -> Self {
             FakeSshd {
                 calls: RefCell::new(vec![]),
-                effective: effective.map(String::from),
+                effective: vec![effective.map(String::from)],
+                next: Cell::new(0),
                 test_fails: Cell::new(false),
                 reload_fails: false,
             }
@@ -454,7 +478,9 @@ mod tests {
         }
         fn effective_trusted_user_ca_keys(&self) -> anyhow::Result<Option<String>> {
             self.calls.borrow_mut().push("effective");
-            Ok(self.effective.clone())
+            let i = self.next.get();
+            self.next.set(i + 1);
+            Ok(self.effective[i.min(self.effective.len() - 1)].clone())
         }
         fn reload(&self) -> anyhow::Result<()> {
             self.calls.borrow_mut().push("reload");
@@ -518,7 +544,7 @@ mod tests {
             line.splitn(3, ' ').take(2).collect::<Vec<_>>().join(" ")
         );
         assert_eq!(keys, expected);
-        let dropin = read(d.path(), "etc/ssh/sshd_config.d/50-ezcrypt.conf");
+        let dropin = read(d.path(), "etc/ssh/sshd_config.d/10-ezcrypt.conf");
         assert!(dropin.contains(&format!("TrustedUserCAKeys {OURS}")));
         let cfg = read(d.path(), "etc/ssh/sshd_config");
         assert_eq!(
@@ -579,7 +605,7 @@ mod tests {
         install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).unwrap();
         assert!(
             d.path()
-                .join("etc/ssh/sshd_config.d/50-ezcrypt.conf")
+                .join("etc/ssh/sshd_config.d/10-ezcrypt.conf")
                 .exists()
         );
         assert!(
@@ -777,6 +803,91 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let r = install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).unwrap();
         assert!(!r.added_include);
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn winner_after_write_restores_and_names_file() {
+        let d = setup(SSHD_CONFIG);
+        let before = tree(d.path());
+        let mut sshd = FakeSshd::new(None);
+        sshd.effective = vec![None, Some("/etc/ssh/winner".into())];
+        for use_existing in [false, true] {
+            let e = install(d.path(), &ca_line(""), "ca", use_existing, &sshd).unwrap_err();
+            assert!(format!("{e}").contains("already set to /etc/ssh/winner"));
+            assert_eq!(tree(d.path()), before);
+            sshd.next.set(0);
+        }
+        assert!(!sshd.calls().contains(&"reload"));
+    }
+
+    #[test]
+    fn dropin_is_named_10() {
+        let d = setup(SSHD_CONFIG);
+        install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).unwrap();
+        assert!(
+            d.path()
+                .join("etc/ssh/sshd_config.d/10-ezcrypt.conf")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn relative_or_escaping_effective_paths_are_refused() {
+        for bad in ["other_ca", "/etc/ssh/../../../tmp/x", "/etc/./ssh/x"] {
+            let d = setup(SSHD_CONFIG);
+            let before = tree(d.path());
+            let sshd = FakeSshd::new(Some(bad));
+            assert!(install(d.path(), &ca_line(""), "ca", true, &sshd).is_err());
+            assert_eq!(tree(d.path()), before);
+            assert_eq!(sshd.calls(), vec!["effective"]);
+        }
+    }
+
+    #[test]
+    fn missing_use_existing_target_errors_without_creating_dirs() {
+        let d = setup(SSHD_CONFIG);
+        let before = tree(d.path());
+        let sshd = FakeSshd::new(Some("/etc/ssh/new/dir/ca"));
+        assert!(install(d.path(), &ca_line(""), "ca", true, &sshd).is_err());
+        assert_eq!(tree(d.path()), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_key_file_is_refused() {
+        let d = setup(SSHD_CONFIG);
+        std::fs::create_dir_all(d.path().join("etc/ssh/ezcrypt")).unwrap();
+        std::fs::write(d.path().join("elsewhere"), "x\n").unwrap();
+        let link = d.path().join(KEYFILE);
+        std::os::unix::fs::symlink(d.path().join("elsewhere"), &link).unwrap();
+        let before = tree(d.path());
+        assert!(install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).is_err());
+        assert_eq!(tree(d.path()), before);
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_use_existing_target_is_refused() {
+        let d = setup(SSHD_CONFIG);
+        std::fs::write(d.path().join("real_ca"), "ssh-ed25519 AAAA old\n").unwrap();
+        let link = d.path().join("etc/ssh/legacy_ca");
+        std::os::unix::fs::symlink(d.path().join("real_ca"), &link).unwrap();
+        let before = tree(d.path());
+        let sshd = FakeSshd::new(Some("/etc/ssh/legacy_ca"));
+        assert!(install(d.path(), &ca_line(""), "ca", true, &sshd).is_err());
+        assert_eq!(tree(d.path()), before);
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
