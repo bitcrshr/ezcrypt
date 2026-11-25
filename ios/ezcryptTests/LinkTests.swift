@@ -54,6 +54,22 @@ final class LinkTests: XCTestCase {
       try Link.replyText(offer, .certificate("ssh-ed25519-cert-v01@openssh.com AAAA")))
   }
 
+  /// A terminal drops an input line over 1024 bytes, so the reply is wrapped,
+  /// and the display keeps its lines while the copied text is exact.
+  func testReplyTextIsWrappedAndShownLineByLine() throws {
+    let offer = try Link.offer(LinkFixture.trustURL)
+    let text = try Link.replyText(
+      offer, .caKey(publicKey: LinkFixture.subjectPublicKey, name: "Home CA"))
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+    XCTAssertGreaterThan(lines.count, 1, text)
+    XCTAssertTrue(lines.allSatisfy { !$0.isEmpty && $0.utf8.count <= 76 }, text)
+    let shown = DeliveryView.grouped(text)
+    let shownLines = shown.split(separator: "\n", omittingEmptySubsequences: false)
+    XCTAssertEqual(shownLines.count, lines.count, shown)
+    XCTAssertTrue(shownLines[0].hasPrefix("ezcrypt1: "), shown)
+    XCTAssertEqual(shown.replacingOccurrences(of: " ", with: ""), text)
+  }
+
   func testCancelledDeliveryThrowsCancellationError() async throws {
     let offer = try Link.offer(LinkFixture.trustURL)
     let delivery = Task {

@@ -201,9 +201,10 @@ struct DeliveryView: View {
       Section { OfferHeader(offer: offer).listRowBackground(Color.clear) }
       if route == .paste, let reply {
         Section {
-          // Grouped so lines break between groups: wrapping a single long token
-          // inserts hyphens, which base64url also contains. Copied, it is the
-          // ungrouped text; the terminal ignores spaces if the groups are pasted.
+          // Shown line by line in groups so the screen wraps between groups:
+          // wrapping a single long token inserts hyphens, which base64url also
+          // contains. Copied, it is the exact reply; the terminal ignores the
+          // spaces if the shown text is selected and pasted instead.
           Text(verbatim: Self.grouped(reply)).font(.footnote.monospaced())
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -243,8 +244,13 @@ struct DeliveryView: View {
             status == .sending
               ? "Sending to \(offer.host)…" : "Waiting for confirmation on \(offer.host)")
           if status == .waiting {
-            Text("Approve the request in the terminal, or copy the reply instead.")
-              .font(.subheadline).foregroundStyle(.secondary)
+            // Only trust asks its user to approve; enroll installs on arrival.
+            Text(
+              offer.kind == .trust
+                ? "Approve the request in the terminal, or copy the reply instead."
+                : "If it doesn’t arrive, copy the reply instead."
+            )
+            .font(.subheadline).foregroundStyle(.secondary)
           }
         }
       }
@@ -293,16 +299,26 @@ struct DeliveryView: View {
       if !Task.isCancelled { status = .failed(error.localizedDescription) }
     }
   }
+  /// The reply for display: its lines kept (a terminal drops a line over
+  /// 1024 bytes, so they must survive selecting and pasting), each in groups
+  /// of eight characters after the prefix.
   static func grouped(_ reply: String) -> String {
     let prefix = "ezcrypt1:"
     guard reply.hasPrefix(prefix) else { return reply }
-    var groups = [prefix]
-    var rest = reply.dropFirst(prefix.count)
-    while !rest.isEmpty {
-      groups.append(String(rest.prefix(8)))
-      rest = rest.dropFirst(8)
-    }
-    return groups.joined(separator: " ")
+    let lines = reply.split(separator: "\n", omittingEmptySubsequences: false)
+    return lines.enumerated().map { index, line in
+      var groups: [String] = []
+      var rest = line[...]
+      if index == 0 {
+        groups.append(prefix)
+        rest = rest.dropFirst(prefix.count)
+      }
+      while !rest.isEmpty {
+        groups.append(String(rest.prefix(8)))
+        rest = rest.dropFirst(8)
+      }
+      return groups.joined(separator: " ")
+    }.joined(separator: "\n")
   }
   private func copyInstead() {
     do {

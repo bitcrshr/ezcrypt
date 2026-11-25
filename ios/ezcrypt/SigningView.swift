@@ -117,6 +117,10 @@ struct SigningView: View {
       }
     }
     .interactiveDismissDisabled(working || store.busy)
+    #if os(iOS)
+      // Going back mid-sign or after issuing would orphan the delivery.
+      .navigationBarBackButtonHidden(link != nil && (working || store.busy || completed))
+    #endif
     .onAppear {
       if serial.isEmpty {
         serial = (store.authority(authority.id)?.nextSerial ?? authority.nextSerial).description
