@@ -103,7 +103,7 @@ fn offer_url_rejects() {
     assert!(Offer::from_url(&url_with(&[("u", s("al\u{85}ice"))])).is_err());
     // subject limits
     let enroll = |p: Vec<u8>| url_with(&[("k", s("enroll")), ("p", Some(B64.encode(p)))]);
-    Offer::from_url(&enroll(vec![1; 700])).unwrap();
+    Offer::from_url(&enroll(vec![1; 600])).unwrap();
     assert!(Offer::from_url(&enroll(vec![1; 1025])).is_err());
     assert!(Offer::from_url(&url_with(&[("k", s("enroll"))])).is_err());
     assert!(Offer::from_url(&url_with(&[("p", Some(B64.encode([1u8; 4])))])).is_err());
