@@ -449,3 +449,134 @@ fn gpg_portable_export_and_recipient_validation() {
         );
     }
 }
+
+fn assert_inspects(req: &Request, issued: &certificate::Issued) {
+    let inspected = certificate::inspect(&issued.certificate).unwrap();
+    assert_eq!(inspected.purpose, req.purpose);
+    assert_eq!(inspected.serial, req.serial.parse::<u64>().unwrap());
+    assert_eq!(inspected.principals, req.principals);
+    assert_eq!(inspected.valid_after, req.valid_after);
+    assert_eq!(inspected.valid_before, req.valid_before);
+    assert_eq!(inspected.key_id, req.key_id);
+    assert_eq!(
+        inspected.subject.key_data(),
+        certificate::parse_public(&req.public_key)
+            .unwrap()
+            .key_data()
+    );
+    assert_eq!(
+        inspected
+            .ca
+            .fingerprint(ssh_key::HashAlg::Sha256)
+            .to_string(),
+        issued.ca_fingerprint
+    );
+}
+
+#[test]
+fn inspect_round_trips_issued_certificates() {
+    for algorithm in ["ed25519", "p256", "p384", "p521"] {
+        let ca =
+            PrivateKey::random(&mut OsRng, certificate::algorithm(algorithm).unwrap()).unwrap();
+        for purpose in [Purpose::User, Purpose::Host] {
+            for forever in [false, true] {
+                let mut req = request();
+                req.purpose = purpose;
+                if purpose == Purpose::Host {
+                    req.critical_options.clear();
+                    req.extensions.clear();
+                    req.principals = vec!["host.example.com".into()];
+                }
+                if forever {
+                    req.valid_before = None;
+                }
+                let issued = certificate::issue(&req, purpose, &ca).unwrap();
+                assert_inspects(&req, &issued);
+            }
+        }
+    }
+}
+
+#[test]
+fn inspect_round_trips_security_key_subjects() {
+    for (subject_alg, primitive) in [
+        ("sk-ssh-ed25519@openssh.com", Algorithm::Ed25519),
+        (
+            "sk-ecdsa-sha2-nistp256@openssh.com",
+            certificate::algorithm("p256").unwrap(),
+        ),
+    ] {
+        let key = PrivateKey::random(&mut OsRng, primitive).unwrap();
+        let ordinary = key.public_key().to_bytes().unwrap();
+        let alg_len = u32::from_be_bytes(ordinary[..4].try_into().unwrap()) as usize;
+        let mut wire = Vec::new();
+        for part in [subject_alg.as_bytes(), &[]] {
+            if part.is_empty() {
+                wire.extend_from_slice(&ordinary[4 + alg_len..]);
+            } else {
+                wire.extend_from_slice(&(part.len() as u32).to_be_bytes());
+                wire.extend_from_slice(part);
+            }
+        }
+        wire.extend_from_slice(&(b"ssh:test".len() as u32).to_be_bytes());
+        wire.extend_from_slice(b"ssh:test");
+        let mut req = request();
+        req.public_key = format!("{subject_alg} {} test", STANDARD.encode(&wire));
+        let ca = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
+        for forever in [false, true] {
+            req.valid_before = if forever { None } else { Some(2_000_000_000) };
+            let issued = certificate::issue(&req, Purpose::User, &ca).unwrap();
+            assert_inspects(&req, &issued);
+        }
+    }
+}
+
+#[test]
+fn inspect_rejects_tampering() {
+    for algorithm in ["ed25519", "p256"] {
+        let ca =
+            PrivateKey::random(&mut OsRng, certificate::algorithm(algorithm).unwrap()).unwrap();
+        let issued = certificate::issue(&request(), Purpose::User, &ca).unwrap();
+        certificate::inspect(&issued.certificate).unwrap();
+        let (cert_type, rest) = issued.certificate.split_once(' ').unwrap();
+        let blob = STANDARD.decode(rest.split(' ').next().unwrap()).unwrap();
+        let line = |bytes: &[u8]| format!("{cert_type} {}", STANDARD.encode(bytes));
+        for index in 0..blob.len() {
+            let mut tampered = blob.clone();
+            tampered[index] ^= 1;
+            assert!(
+                certificate::inspect(&line(&tampered)).is_err(),
+                "flip at byte {index} was accepted"
+            );
+        }
+        let mut trailing = blob.clone();
+        trailing.push(0);
+        assert!(certificate::inspect(&line(&trailing)).is_err());
+        assert!(certificate::inspect(&line(&blob[..blob.len() - 1])).is_err());
+        assert!(certificate::inspect(&line(&[])).is_err());
+        // Line type must agree with the blob.
+        assert!(certificate::inspect(&format!(
+            "ecdsa-sha2-nistp256-cert-v01@openssh.com {}",
+            STANDARD.encode(&blob)
+        ))
+        .is_err());
+        // RSA certificate type is unsupported.
+        let rsa = {
+            let mut wire = Vec::new();
+            let name = b"ssh-rsa-cert-v01@openssh.com";
+            wire.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            wire.extend_from_slice(name);
+            wire.extend_from_slice(
+                &blob[4 + u32::from_be_bytes(blob[..4].try_into().unwrap()) as usize..],
+            );
+            wire
+        };
+        assert!(certificate::inspect(&format!(
+            "ssh-rsa-cert-v01@openssh.com {}",
+            STANDARD.encode(&rsa)
+        ))
+        .is_err());
+        let long = format!("{} {}", issued.certificate, "x".repeat(16_400));
+        assert!(certificate::inspect(&long).is_err());
+    }
+}

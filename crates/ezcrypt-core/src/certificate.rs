@@ -7,7 +7,8 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use signature::Verifier;
-use ssh_key::{Algorithm, EcdsaCurve, HashAlg, PublicKey, SigningKey};
+use ssh_encoding::{Decode, Reader};
+use ssh_key::{Algorithm, EcdsaCurve, HashAlg, PublicKey, Signature, SigningKey};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,6 +255,105 @@ pub fn issue(
         ca_fingerprint: ca.fingerprint(HashAlg::Sha256).to_string(),
         duplicate_id: request.duplicate_id(&ca)?,
         request,
+    })
+}
+
+#[derive(Clone, Debug)]
+pub struct Inspected {
+    pub purpose: Purpose,
+    pub subject: PublicKey,
+    pub key_id: String,
+    pub serial: u64,
+    pub principals: Vec<String>,
+    pub valid_after: u64,
+    /// `None` is the OpenSSH forever sentinel (`u64::MAX` on the wire).
+    pub valid_before: Option<u64>,
+    pub ca: PublicKey,
+}
+
+/// Parses an OpenSSH certificate line and verifies its CA signature. This is
+/// the inverse of `issue` and does not use ssh-key's `Certificate`, which
+/// rejects the forever sentinel.
+pub fn inspect(certificate: &str) -> Result<Inspected> {
+    if certificate.len() > 16_384 {
+        return Err(invalid("Certificate is too large"));
+    }
+    let mut fields = certificate.split_whitespace();
+    let (line_type, encoded) = fields
+        .next()
+        .zip(fields.next())
+        .ok_or_else(|| invalid("Malformed certificate"))?;
+    let wire = STANDARD.decode(encoded)?;
+    let total = wire.len();
+    let mut reader = wire.as_slice();
+    let cert_type = String::decode(&mut reader)?;
+    if cert_type != line_type {
+        return Err(invalid("Certificate type does not match its contents"));
+    }
+    // (base algorithm, number of subject key fields besides the application)
+    let (base, key_fields, application) = match cert_type.as_str() {
+        "ssh-ed25519-cert-v01@openssh.com" => ("ssh-ed25519", 1, false),
+        "ecdsa-sha2-nistp256-cert-v01@openssh.com" => ("ecdsa-sha2-nistp256", 2, false),
+        "ecdsa-sha2-nistp384-cert-v01@openssh.com" => ("ecdsa-sha2-nistp384", 2, false),
+        "ecdsa-sha2-nistp521-cert-v01@openssh.com" => ("ecdsa-sha2-nistp521", 2, false),
+        "sk-ssh-ed25519-cert-v01@openssh.com" => ("sk-ssh-ed25519@openssh.com", 1, true),
+        "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com" => {
+            ("sk-ecdsa-sha2-nistp256@openssh.com", 2, true)
+        }
+        _ => return Err(invalid("Unsupported certificate type")),
+    };
+    let _nonce = Vec::<u8>::decode(&mut reader)?;
+    let mut subject_blob = Vec::new();
+    string(&mut subject_blob, base.as_bytes());
+    for _ in 0..key_fields + usize::from(application) {
+        string(&mut subject_blob, &Vec::<u8>::decode(&mut reader)?);
+    }
+    let subject = PublicKey::from_bytes(&subject_blob)?;
+    let serial = u64::decode(&mut reader)?;
+    let purpose = match u32::decode(&mut reader)? {
+        1 => Purpose::User,
+        2 => Purpose::Host,
+        _ => return Err(invalid("Unknown certificate type")),
+    };
+    let key_id = String::decode(&mut reader)?;
+    let principal_blob = Vec::<u8>::decode(&mut reader)?;
+    let mut principal_reader = principal_blob.as_slice();
+    let mut principals = Vec::new();
+    while !principal_reader.is_empty() {
+        principals.push(String::decode(&mut principal_reader)?);
+    }
+    let valid_after = u64::decode(&mut reader)?;
+    let valid_before = match u64::decode(&mut reader)? {
+        u64::MAX => None,
+        end => Some(end),
+    };
+    let _critical_options = Vec::<u8>::decode(&mut reader)?;
+    let _extensions = Vec::<u8>::decode(&mut reader)?;
+    let _reserved = Vec::<u8>::decode(&mut reader)?;
+    let ca = PublicKey::from_bytes(&Vec::<u8>::decode(&mut reader)?)?;
+    if !matches!(ca.algorithm(), Algorithm::Ed25519 | Algorithm::Ecdsa { .. }) {
+        return Err(invalid("Unsupported certificate authority key type"));
+    }
+    let signed = &wire[..total - reader.remaining_len()];
+    let signature = Signature::try_from(Vec::<u8>::decode(&mut reader)?.as_slice())?;
+    if !reader.is_empty() {
+        return Err(invalid("Trailing data after certificate signature"));
+    }
+    if signature.algorithm() != ca.algorithm() {
+        return Err(invalid(
+            "Signature does not match the certificate authority",
+        ));
+    }
+    Verifier::verify(&ca, signed, &signature)?;
+    Ok(Inspected {
+        purpose,
+        subject,
+        key_id,
+        serial,
+        principals,
+        valid_after,
+        valid_before,
+        ca,
     })
 }
 
