@@ -2,7 +2,8 @@
 # Package a built ezcrypt binary for release.
 # Usage: install/package.sh <target> <outdir>
 # Expects `cargo build --locked --release -p ezcrypt-cli --target <target>`
-# to have run. Set CARGO_TARGET_DIR if the build used a custom target dir.
+# to have run. The target dir comes from CARGO_TARGET_DIR, else from cargo
+# itself (the repo's .cargo/config.toml relocates it to .build/rust).
 set -eu
 
 if [ "$#" -ne 2 ]; then
@@ -11,7 +12,15 @@ if [ "$#" -ne 2 ]; then
 fi
 target=$1
 outdir=$2
-tdir=${CARGO_TARGET_DIR:-target}
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  tdir=$CARGO_TARGET_DIR
+else
+  # Pull "target_directory" out of the metadata JSON without needing jq or
+  # python; JSON escapes Windows backslashes, so turn them into slashes.
+  tdir=$(cargo metadata --no-deps --format-version 1 |
+    sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | sed 's/\\\\/\//g')
+  [ -n "$tdir" ] || { echo "cannot determine cargo target directory" >&2; exit 1; }
+fi
 
 mkdir -p "$outdir"
 outdir=$(cd "$outdir" && pwd)

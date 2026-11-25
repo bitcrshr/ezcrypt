@@ -17,6 +17,8 @@
           cargoLock.lockFile = ./Cargo.lock;
           # Default features only: `test-hooks` must never be built into a shipped binary.
           cargoBuildFlags = [ "-p" "ezcrypt-cli" ];
+          # .cargo/config.toml relocates the target dir; the install hook expects ./target.
+          CARGO_TARGET_DIR = "target";
           doCheck = false;
           meta = {
             description = "Command-line client for the ezcrypt iPhone SSH CA";

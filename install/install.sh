@@ -49,6 +49,7 @@ fi
 (cd "$tmp" && verify) || die "checksum mismatch for $archive"
 
 tar -xzf "$tmp/$archive" -C "$tmp" ezcrypt
+"$tmp/ezcrypt" --version >/dev/null || die "downloaded binary does not run on this system"
 
 if [ "$(id -u)" -eq 0 ]; then
   dest=/usr/local/bin

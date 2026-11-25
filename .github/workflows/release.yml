@@ -21,9 +21,8 @@ jobs:
           - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04 }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
           - { target: aarch64-apple-darwin, os: macos-latest }
-          # MSVC cross-compiles to aarch64 from an x64 runner.
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
-          - { target: aarch64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
     steps:
       - uses: actions/checkout@v4
       # rustup reads rust-toolchain.toml and installs the pinned toolchain.
@@ -39,6 +38,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          # .cargo/config.toml moves the target dir out of ./target.
+          workspaces: ". -> .build/rust"
       # Default features only. Never use --all-features: the ezcrypt-cli
       # `test-hooks` feature adds a flag that skips secret handling and must
       # not ship in release binaries.
@@ -78,16 +79,20 @@ jobs:
           sleep 2
           cd ..
           EZCRYPT_BASE_URL=http://127.0.0.1:8000 sh install/install.sh
-          "$HOME/.local/bin/ezcrypt" --version
+          v=$("$HOME/.local/bin/ezcrypt" --version)
+          echo "$v"
+          case "$v" in *"${GITHUB_REF_NAME#v}"*) ;; *) echo "version '$v' does not contain '${GITHUB_REF_NAME#v}'" >&2; exit 1 ;; esac
 
   smoke-windows:
     name: install.ps1 smoke (${{ matrix.target }})
     needs: build
-    # Only x64 can execute here; the arm64 archive is built but not run.
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        target: [x86_64-pc-windows-msvc]
+        include:
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -107,7 +112,10 @@ jobs:
           try {
             $env:EZCRYPT_BASE_URL = 'http://127.0.0.1:8000'
             & ./install/install.ps1
-            & "$env:LOCALAPPDATA\Programs\ezcrypt\ezcrypt.exe" --version
+            $v = & "$env:LOCALAPPDATA\Programs\ezcrypt\ezcrypt.exe" --version
+            Write-Host $v
+            $want = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($v -notmatch [regex]::Escape($want)) { throw "version '$v' does not contain '$want'" }
           } finally {
             Stop-Process -Id $server.Id -Force
           }
@@ -137,6 +145,6 @@ jobs:
         run: |
           flags=""
           case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+          # Assets are attached at creation so releases/latest/download never 404s.
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --generate-notes $flags
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/*
