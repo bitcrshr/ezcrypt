@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       # rustup reads rust-toolchain.toml and installs the pinned toolchain.
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --workspace
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -39,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: rustup toolchain install
       - uses: extractions/setup-just@v2
       - uses: Swatinem/rust-cache@v2
       - run: just test-core
@@ -51,8 +51,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: rustup toolchain install
       - uses: extractions/setup-just@v2
+      # The Justfile selects zsh as its shell, which ubuntu runners lack.
+      - run: sudo apt-get update && sudo apt-get install -y zsh
       - uses: Swatinem/rust-cache@v2
       - run: just test-trust
 

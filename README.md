@@ -54,9 +54,10 @@ sudo ezcrypt trust
 ```
 
 It prints a QR code and the same payload as text. Scan it with the Camera or the
-app's Scan action, choose which user CA to send, and tap Send. ezcrypt writes and
-validates an `sshd` configuration for `TrustedUserCAKeys`, then asks you to
-confirm at the terminal.
+app's Scan action, choose which user CA to send, and tap Send. The terminal then
+shows the CA name, fingerprint, and randomart and asks you to confirm. Only after
+you accept does ezcrypt write the `TrustedUserCAKeys` configuration, validate it
+with `sshd -t` and `sshd -T`, and reload `sshd`.
 
 **Get a certificate on a client.** Run on the machine that holds the SSH key:
 
@@ -108,7 +109,7 @@ Keychain access group, so the Mac must be registered with that team.
 
 The Simulator has no Secure Enclave. For interactive development, add `--demo` to
 Xcode's Run arguments (Debug, Simulator only). This enables isolated disposable
-Keychain keys and a **SIMULATOR - TEST KEYS** banner. Device and Release builds cannot
+Keychain keys and a **SIMULATOR · TEST KEYS** banner. Device and Release builds cannot
 use the demo backend, and no fixture CA or plaintext private key ships with the app.
 
 `just test-mac` uses ad-hoc signing and `ezcryptMac-local.entitlements`, which lack

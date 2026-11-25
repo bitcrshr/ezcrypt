@@ -34,7 +34,7 @@ test-ios:
 check-device:
     xcodebuild -project {{project}} -scheme ezcrypt -configuration Release -destination 'generic/platform=iOS' -derivedDataPath .build/device CODE_SIGNING_ALLOWED=NO build
 
-# Open the checked-in Xcode project. Choose a signing team for physical devices.
+# Open the checked-in Xcode project. For physical devices, set DEVELOPMENT_TEAM in ios/Config/Signing.local.xcconfig.
 xcode:
     open {{project}}
 
@@ -47,7 +47,7 @@ fmt:
     cargo fmt --all
     xcrun swift-format format --in-place --recursive ios/ezcrypt ios/ezcryptTests ios/ezcryptUITests ios/ezcryptMacTests ios/Tools
 
-# Native Apple silicon Mac build. Select a development team in Xcode for real key use.
+# Native Apple silicon Mac build. Set DEVELOPMENT_TEAM in ios/Config/Signing.local.xcconfig for real key use.
 build-mac *args="":
     xcodebuild -project {{project}} -scheme ezcryptMac -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/mac build {{args}}
 
