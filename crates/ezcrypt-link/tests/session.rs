@@ -324,3 +324,102 @@ async fn only_one_reply_is_accepted_per_session() {
     })
     .await;
 }
+
+async fn raw_endpoint() -> iroh::Endpoint {
+    iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .relay_mode(iroh::RelayMode::Disabled)
+        .bind()
+        .await
+        .expect("raw bind")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stalled_connections_do_not_block_a_real_delivery() {
+    bounded(async {
+        let listener = bind(Kind::Trust).await;
+        let secret = listener.offer().secret;
+        let ok = Outcome::Ok {
+            message: "done".into(),
+        };
+        let attack = async {
+            // Peers that know only the endpoint address connect and stall:
+            // some never open a stream, some send part of a reply and never finish.
+            let mut held = Vec::new();
+            for i in 0..4 {
+                let ep = raw_endpoint().await;
+                let conn = ep
+                    .connect(listener.addr(), ezcrypt_link::ALPN)
+                    .await
+                    .expect("stalled connect");
+                let streams = if i % 2 == 1 {
+                    let (mut send, recv) = conn.open_bi().await.expect("open");
+                    send.write_all(b"{\"v\":1,").await.expect("write");
+                    Some((send, recv))
+                } else {
+                    None
+                };
+                held.push((ep, conn, streams));
+            }
+            let started = Instant::now();
+            let out = deliver_to(
+                Network::Local,
+                listener.addr(),
+                secret,
+                ca_key(),
+                Duration::from_secs(5),
+            )
+            .await;
+            (held, out, started.elapsed())
+        };
+        let serve = async {
+            let incoming = listener.next().await.expect("next");
+            let payload = incoming.payload.clone();
+            incoming.respond(ok.clone()).await.expect("respond");
+            payload
+        };
+        let (served, (held, out, elapsed)) = tokio::join!(serve, attack);
+        assert_eq!(served, ca_key());
+        assert_eq!(out, Ok(ok));
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        for (ep, conn, _) in held {
+            conn.close(iroh::endpoint::VarInt::from_u32(0), b"");
+            ep.close().await;
+        }
+        listener.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oversized_reply_is_rejected() {
+    bounded(async {
+        let listener = bind(Kind::Trust).await;
+        let ep = raw_endpoint().await;
+        let attack = async {
+            let conn = ep
+                .connect(listener.addr(), ezcrypt_link::ALPN)
+                .await
+                .expect("connect");
+            let (mut send, mut recv) = conn.open_bi().await.expect("open");
+            let write = async {
+                // The listener stops reading at the limit, so this may fail.
+                let _ = send.write_all(&vec![b' '; 64 * 1024 + 1]).await;
+                let _ = send.finish();
+            };
+            let (_, body) = tokio::join!(write, recv.read_to_end(4096));
+            conn.close(iroh::endpoint::VarInt::from_u32(0), b"");
+            body.expect("read outcome")
+        };
+        let body = tokio::select! {
+            r = listener.next() => panic!("next returned for an oversized reply: {:?}", r.map(|i| i.payload)),
+            body = attack => body,
+        };
+        match serde_json::from_slice::<Outcome>(&body).expect("outcome JSON") {
+            Outcome::Error { message } => assert!(message.contains("too large"), "{message}"),
+            other => panic!("expected an error outcome, got {other:?}"),
+        }
+        ep.close().await;
+        listener.close().await;
+    })
+    .await;
+}

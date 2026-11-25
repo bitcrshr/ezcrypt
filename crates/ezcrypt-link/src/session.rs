@@ -12,7 +12,9 @@ use iroh::{Endpoint, EndpointAddr, RelayMode};
 use rand::RngCore;
 use rand::rngs::OsRng;
 use subtle::ConstantTimeEq;
-use tokio::time::timeout;
+use tokio::sync::Mutex;
+use tokio::task::JoinSet;
+use tokio::time::{Instant, timeout, timeout_at};
 
 use crate::offer::check_fields;
 use crate::reply::MAX_JSON;
@@ -25,6 +27,10 @@ const ONLINE_WAIT: Duration = Duration::from_secs(10);
 const RECEIVE_WAIT: Duration = Duration::from_secs(30);
 /// How long to wait for the peer to close after sending an outcome.
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
+/// The whole of sending an outcome, including `CLOSE_WAIT`.
+const SEND_WAIT: Duration = Duration::from_secs(10);
+/// Connections handled at once. More wait in the endpoint's queue.
+const MAX_PENDING: usize = 8;
 const CONNECT_WAIT: Duration = Duration::from_secs(30);
 /// The machine may wait on its user before answering.
 const OUTCOME_WAIT: Duration = Duration::from_secs(11 * 60);
@@ -63,12 +69,19 @@ async fn bind_endpoint(network: Network, listen: bool) -> Result<Endpoint, LinkE
         .map_err(|e| LinkError::Network(e.to_string()))
 }
 
+/// A delivery that passed the version, secret and kind checks.
+type Checked = Option<(Connection, SendStream, Payload)>;
+
 /// The machine's side of a session. It hands out at most one successful reply.
 pub struct Listener {
     endpoint: Endpoint,
     secret: [u8; 16],
     request: Request,
     claimed: AtomicBool,
+    /// One task per connection, so a stalled peer cannot hold up the others.
+    /// Kept here so a dropped `next()` does not lose connections in progress;
+    /// dropping the listener aborts them.
+    pending: Mutex<JoinSet<Checked>>,
 }
 
 impl std::fmt::Debug for Listener {
@@ -103,6 +116,7 @@ impl Listener {
             secret,
             request,
             claimed: AtomicBool::new(false),
+            pending: Mutex::new(JoinSet::new()),
         })
     }
 
@@ -125,29 +139,27 @@ impl Listener {
     /// `Outcome::Error` and the wait continues, so this returns only once per
     /// session; after that, every delivery is refused.
     pub async fn next(&self) -> Result<Incoming, LinkError> {
+        let mut pending = self.pending.lock().await;
         loop {
-            let incoming = self
-                .endpoint
-                .accept()
-                .await
-                .ok_or_else(|| LinkError::Network("the listener has closed".into()))?;
-            let Ok(Some((conn, send, body))) = timeout(RECEIVE_WAIT, receive(incoming)).await
-            else {
-                continue;
-            };
-            match body.and_then(|json| self.check(Reply::from_json(&json)?)) {
-                Ok(payload) => {
+            tokio::select! {
+                incoming = self.endpoint.accept(), if pending.len() < MAX_PENDING => {
+                    let incoming = incoming
+                        .ok_or_else(|| LinkError::Network("the listener has closed".into()))?;
+                    pending.spawn(handle(incoming, self.secret, self.request.kind));
+                }
+                Some(done) = pending.join_next(), if !pending.is_empty() => {
+                    let Ok(Some((conn, send, payload))) = done else {
+                        continue;
+                    };
+                    if let Err(e) = self.claim() {
+                        tokio::spawn(send_outcome(conn, send, error_outcome(e)));
+                        continue;
+                    }
                     return Ok(Incoming {
                         payload,
                         conn,
                         send,
                     });
-                }
-                Err(e) => {
-                    let outcome = Outcome::Error {
-                        message: e.to_string(),
-                    };
-                    tokio::spawn(send_outcome(conn, send, outcome));
                 }
             }
         }
@@ -155,28 +167,53 @@ impl Listener {
 
     /// The paste fallback, with the same checks as `next`.
     pub fn accept_pasted(&self, text: &str) -> Result<Payload, LinkError> {
-        self.check(Reply::from_text(text)?)
+        let payload = check(Reply::from_text(text)?, &self.secret, self.request.kind)?;
+        self.claim()?;
+        Ok(payload)
     }
 
     pub async fn close(self) {
         self.endpoint.close().await;
     }
 
-    /// Version and shape are checked by `Reply::from_json`.
-    fn check(&self, reply: Reply) -> Result<Payload, LinkError> {
-        if !bool::from(reply.secret.ct_eq(&self.secret)) {
-            return Err(LinkError::WrongSecret);
-        }
-        match (self.request.kind, &reply.payload) {
-            (Kind::Trust, Payload::CaKey { .. }) | (Kind::Enroll, Payload::Certificate { .. }) => {}
-            _ => return Err(LinkError::WrongPayload),
-        }
+    fn claim(&self) -> Result<(), LinkError> {
         if self.claimed.swap(true, Ordering::SeqCst) {
             return Err(LinkError::Rejected(
                 "this session already received a reply".into(),
             ));
         }
-        Ok(reply.payload)
+        Ok(())
+    }
+}
+
+/// Version and shape are checked by `Reply::from_json`.
+fn check(reply: Reply, secret: &[u8; 16], kind: Kind) -> Result<Payload, LinkError> {
+    if !bool::from(reply.secret.ct_eq(secret)) {
+        return Err(LinkError::WrongSecret);
+    }
+    match (kind, &reply.payload) {
+        (Kind::Trust, Payload::CaKey { .. }) | (Kind::Enroll, Payload::Certificate { .. }) => {}
+        _ => return Err(LinkError::WrongPayload),
+    }
+    Ok(reply.payload)
+}
+
+fn error_outcome(e: LinkError) -> Outcome {
+    Outcome::Error {
+        message: e.to_string(),
+    }
+}
+
+/// Receive and check one connection's reply, answering a failed check here.
+/// Bounded by `RECEIVE_WAIT` plus `SEND_WAIT`.
+async fn handle(incoming: iroh::endpoint::Incoming, secret: [u8; 16], kind: Kind) -> Checked {
+    let (conn, send, body) = timeout(RECEIVE_WAIT, receive(incoming)).await.ok()??;
+    match body.and_then(|json| check(Reply::from_json(&json)?, &secret, kind)) {
+        Ok(payload) => Some((conn, send, payload)),
+        Err(e) => {
+            let _ = send_outcome(conn, send, error_outcome(e)).await;
+            None
+        }
     }
 }
 
@@ -215,17 +252,24 @@ impl Incoming {
     }
 }
 
+/// Send an outcome, all within `SEND_WAIT`: a peer that withholds flow
+/// credit cannot hold the stream open.
 async fn send_outcome(
     conn: Connection,
     mut send: SendStream,
     outcome: Outcome,
 ) -> Result<(), LinkError> {
-    send.write_all(&encode_outcome(outcome))
-        .await
-        .map_err(write_error)?;
-    send.finish().map_err(|_| LinkError::Unreachable)?;
+    let deadline = Instant::now() + SEND_WAIT;
+    let json = encode_outcome(outcome);
+    let sent = timeout_at(deadline, async {
+        send.write_all(&json).await.map_err(write_error)?;
+        send.finish().map_err(|_| LinkError::Unreachable)
+    })
+    .await;
+    sent.map_err(|_| LinkError::Timeout)??;
     // Dropping the connection now could discard the outcome; let the peer close it.
-    let _ = timeout(CLOSE_WAIT, conn.closed()).await;
+    let close_by = deadline.min(Instant::now() + CLOSE_WAIT);
+    let _ = timeout_at(close_by, conn.closed()).await;
     Ok(())
 }
 
