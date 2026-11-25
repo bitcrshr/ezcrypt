@@ -2,6 +2,8 @@ mod enroll;
 mod input;
 mod qr;
 mod session;
+#[allow(dead_code)]
+mod trust;
 
 use std::path::PathBuf;
 
