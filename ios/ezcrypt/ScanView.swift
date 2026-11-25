@@ -38,6 +38,7 @@ import SwiftUI
           }
         }
       }
+      .accessibilityIdentifier("scan-view")
       .navigationTitle("Scan").inlineNavigationTitle()
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {

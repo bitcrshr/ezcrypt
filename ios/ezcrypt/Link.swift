@@ -119,6 +119,11 @@ private struct LinkHandle: @unchecked Sendable {
   let raw: OpaquePointer
 }
 
+enum LinkRoute: Hashable {
+  case scan
+  case offer(LinkOffer)
+}
+
 /// Routes `ezcrypt://` URLs, from a deep link or the scanner, to the link sheet.
 @MainActor @Observable
 final class LinkRouter {
@@ -126,7 +131,11 @@ final class LinkRouter {
   var error: String?
   /// The scanner is showing in the link sheet.
   var scanning = false
-  var presenting: Bool { offer != nil || scanning }
+  var presenting: Bool { route != nil }
+  /// What the link sheet shows: an offer, else the scanner, else nothing.
+  var route: LinkRoute? {
+    if let offer { .offer(offer) } else if scanning { .scan } else { nil }
+  }
   func open(_ url: URL) {
     guard url.scheme?.lowercased() == "ezcrypt" else { return }
     do {

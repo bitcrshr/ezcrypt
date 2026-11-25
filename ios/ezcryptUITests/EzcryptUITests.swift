@@ -140,12 +140,16 @@ final class EzcryptUITests: XCTestCase {
     app.buttons["link-send"].tap()
     let copy = app.buttons["copy-instead"]
     XCTAssertTrue(copy.waitForExistence(timeout: 5))
-    let waiting = app.descendants(matching: .any).matching(
+    // Nobody listens at the endpoint: depending on the network the core keeps
+    // trying (waiting) or soon reports the session gone (Try Again). Either way
+    // Copy instead stays available.
+    let settled = app.descendants(matching: .any).matching(
       NSPredicate(
-        format: "identifier == %@ AND label CONTAINS %@", "delivery-status",
-        "Waiting for confirmation on testhost")
+        format: "(identifier == %@ AND label CONTAINS %@) OR identifier == %@", "delivery-status",
+        "Waiting for confirmation on testhost", "delivery-retry")
     ).firstMatch
-    XCTAssertTrue(waiting.waitForExistence(timeout: 10))
+    XCTAssertTrue(settled.waitForExistence(timeout: 10))
+    XCTAssertTrue(copy.exists)
     capture(app, name: "Delivering")
     copy.tap()
     let reply = app.staticTexts["reply-text"]
@@ -153,6 +157,13 @@ final class EzcryptUITests: XCTestCase {
     XCTAssertTrue(reply.label.hasPrefix("ezcrypt1:"), reply.label)
     XCTAssertTrue(app.staticTexts["Paste this into the waiting terminal."].exists)
     capture(app, name: "Reply to paste")
+    // Closing must not swap the scanner into the dismissing sheet: it would ask for the camera.
+    app.buttons["close-link"].tap()
+    XCTAssertTrue(reply.waitForNonExistence(timeout: 5))
+    let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    XCTAssertFalse(springboard.alerts.firstMatch.waitForExistence(timeout: 3))
+    XCTAssertFalse(app.descendants(matching: .any)["scan-view"].exists)
+    XCTAssertTrue(app.buttons["add-ca"].isHittable)
   }
   @MainActor private func fillSigning(
     _ app: XCUIApplication, publicKey: String, capturing: Bool = false

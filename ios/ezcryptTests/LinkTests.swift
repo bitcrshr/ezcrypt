@@ -69,6 +69,24 @@ final class LinkTests: XCTestCase {
     }
   }
 
+  @MainActor func testRouterPrefersOfferOverScannerAndClosesBoth() throws {
+    let router = LinkRouter()
+    XCTAssertNil(router.route)
+    router.scanning = true
+    XCTAssertEqual(router.route, .scan)
+    router.open(try XCTUnwrap(URL(string: LinkFixture.trustURL)))
+    let offer = try XCTUnwrap(router.offer)
+    XCTAssertEqual(router.route, .offer(offer))
+    router.open(try XCTUnwrap(URL(string: "https://example.com")))
+    XCTAssertEqual(router.route, .offer(offer))
+    XCTAssertNil(router.error)
+    router.open(pasted: "not a link")
+    XCTAssertNotNil(router.error)
+    router.close()
+    XCTAssertNil(router.route)
+    XCTAssertFalse(router.presenting)
+  }
+
   @MainActor func testLinkAuthoritiesExcludeHostAndArchived() throws {
     func authority(_ name: String, _ purpose: Purpose) -> Authority {
       Authority(

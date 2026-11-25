@@ -4,14 +4,24 @@ import SwiftUI
 /// open straight to the offer.
 struct LinkSheet: View {
   @Environment(LinkRouter.self) private var router
+  /// The last route shown. Closing clears the router's route while the sheet is
+  /// still animating away; keeping this one stops that from swapping in the
+  /// scanner, which would ask for the camera.
+  @State private var shown: LinkRoute?
   var body: some View {
     NavigationStack {
-      if let offer = router.offer {
+      switch shown ?? router.route {
+      case .offer(let offer):
         // A new offer starts over, cancelling any delivery to the old one.
         LinkView(offer: offer).id(offer.id)
-      } else {
+      case .scan:
         ScanView()
+      case nil:
+        EmptyView()
       }
+    }
+    .onChange(of: router.route, initial: true) { _, route in
+      if let route { shown = route }
     }
     .editorSize()
     .linkErrorAlert(router, when: true)
