@@ -204,13 +204,16 @@ fn deliver(link: &EzcryptLink, input: &[u8]) -> Result<Delivered> {
         }
     };
     let token = link.token.clone();
-    runtime()?.block_on(async move {
+    // Boxed so the delivery future, with the Iroh endpoint's state, lives on
+    // the heap: `block_on` keeps its future on this thread's stack, and the
+    // app calls from an NSThread with a 512 KB default stack.
+    runtime()?.block_on(Box::pin(async move {
         tokio::select! {
             biased;
             () = token.cancelled() => Ok(Delivered::Cancelled),
             outcome = delivery => Ok(Delivered::Outcome(outcome?)),
         }
-    })
+    }))
 }
 
 /// Create a handle for one delivery. Free it with `ezcrypt_link_free`.

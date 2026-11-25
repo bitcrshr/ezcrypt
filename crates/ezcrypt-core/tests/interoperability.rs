@@ -1,3 +1,6 @@
+// These tests run OpenSSH (`ssh-keygen`) and GnuPG, and set Unix file modes.
+#![cfg(unix)]
+
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ezcrypt_core::{
     certificate::{self, Purpose, Request},
