@@ -335,9 +335,15 @@ pub fn inspect(certificate: &str) -> Result<Inspected> {
         return Err(invalid("Unsupported certificate authority key type"));
     }
     let signed = &wire[..total - reader.remaining_len()];
-    let signature = Signature::try_from(Vec::<u8>::decode(&mut reader)?.as_slice())?;
+    let signature_bytes = Vec::<u8>::decode(&mut reader)?;
     if !reader.is_empty() {
         return Err(invalid("Trailing data after certificate signature"));
+    }
+    // Signature::decode ignores trailing bytes, so check the inner reader.
+    let mut signature_reader = signature_bytes.as_slice();
+    let signature = Signature::decode(&mut signature_reader)?;
+    if !signature_reader.is_empty() {
+        return Err(invalid("Trailing data inside certificate signature"));
     }
     if signature.algorithm() != ca.algorithm() {
         return Err(invalid(

@@ -580,3 +580,19 @@ fn inspect_rejects_tampering() {
         assert!(certificate::inspect(&long).is_err());
     }
 }
+
+#[test]
+fn inspect_rejects_signature_trailing_bytes() {
+    let ca = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
+    let issued = certificate::issue(&request(), Purpose::User, &ca).unwrap();
+    let (cert_type, rest) = issued.certificate.split_once(' ').unwrap();
+    let blob = STANDARD.decode(rest.split(' ').next().unwrap()).unwrap();
+    // Ed25519 signature string: string("ssh-ed25519") || string(sig64) = 83 bytes.
+    let start = blob.len() - 83 - 4;
+    assert_eq!(&blob[start..start + 4], &83u32.to_be_bytes());
+    let mut tampered = blob[..start].to_vec();
+    tampered.extend_from_slice(&84u32.to_be_bytes());
+    tampered.extend_from_slice(&blob[start + 4..]);
+    tampered.push(0);
+    assert!(certificate::inspect(&format!("{cert_type} {}", STANDARD.encode(&tampered))).is_err());
+}
