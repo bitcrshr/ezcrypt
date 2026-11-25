@@ -20,11 +20,11 @@ test-core:
 
 # Build the iOS app for an Apple Silicon Simulator.
 build-ios:
-    xcodebuild -project {{project}} -scheme ezcrypt -configuration Debug -destination 'platform=iOS Simulator,name={{simulator}}' -derivedDataPath .build/xcode build
+    id=$(xcrun simctl list devices available | awk -F'[()]' '/ {{simulator}} \(/{print $2; exit}'); [ -n "$id" ] || { echo "No available Simulator named {{simulator}}" >&2; exit 1; }; xcodebuild -project {{project}} -scheme ezcrypt -configuration Debug -destination "platform=iOS Simulator,id=$id" -derivedDataPath .build/xcode build
 
 # Swift integration and UI tests; hardware stand-ins are Debug Simulator only.
 test-ios:
-    xcodebuild -project {{project}} -scheme ezcrypt -configuration Debug -destination 'platform=iOS Simulator,name={{simulator}}' -derivedDataPath .build/xcode -parallel-testing-enabled NO test
+    id=$(xcrun simctl list devices available | awk -F'[()]' '/ {{simulator}} \(/{print $2; exit}'); [ -n "$id" ] || { echo "No available Simulator named {{simulator}}" >&2; exit 1; }; xcodebuild -project {{project}} -scheme ezcrypt -configuration Debug -destination "platform=iOS Simulator,id=$id" -derivedDataPath .build/xcode -parallel-testing-enabled NO test
 
 # Compile the real device code path without signing or installing.
 check-device:
