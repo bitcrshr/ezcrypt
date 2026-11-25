@@ -101,6 +101,12 @@ fn offer_url_rejects() {
     assert!(Offer::from_url(&url_with(&[("h", s("ex\u{7}ample"))])).is_err());
     assert!(Offer::from_url(&url_with(&[("u", s("al\nice"))])).is_err());
     assert!(Offer::from_url(&url_with(&[("u", s("al\u{85}ice"))])).is_err());
+    for c in [
+        '\u{200E}', '\u{200F}', '\u{202A}', '\u{202E}', '\u{2066}', '\u{2069}',
+    ] {
+        assert!(Offer::from_url(&url_with(&[("h", Some(format!("ex{c}ample.com")))])).is_err());
+        assert!(Offer::from_url(&url_with(&[("u", Some(format!("al{c}ice")))])).is_err());
+    }
     // subject limits
     let enroll = |p: Vec<u8>| url_with(&[("k", s("enroll")), ("p", Some(B64.encode(p)))]);
     Offer::from_url(&enroll(vec![1; 600])).unwrap();

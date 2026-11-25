@@ -40,6 +40,11 @@ fn malformed(msg: &str) -> LinkError {
     LinkError::Malformed(msg.to_string())
 }
 
+/// Bidi format characters can make one name look like another.
+fn is_bidi_format(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 fn check_text(name: &str, value: &str, max: usize) -> Result<(), LinkError> {
     if value.is_empty() {
         return Err(LinkError::Malformed(format!("{name} is empty")));
@@ -47,7 +52,7 @@ fn check_text(name: &str, value: &str, max: usize) -> Result<(), LinkError> {
     if value.len() > max {
         return Err(LinkError::Malformed(format!("{name} is too long")));
     }
-    if value.chars().any(char::is_control) {
+    if value.chars().any(|c| c.is_control() || is_bidi_format(c)) {
         return Err(LinkError::Malformed(format!(
             "{name} contains control characters"
         )));
