@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          # MSVC cross-compiles to aarch64 from an x64 runner.
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+      # rustup reads rust-toolchain.toml and installs the pinned toolchain.
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      # Native runners build the musl targets, so the distro's musl-gcc is
+      # enough for the C parts of the dependency tree; no cross toolchain.
+      - name: Install musl tools
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # Default features only. Never use --all-features: the ezcrypt-cli
+      # `test-hooks` feature adds a flag that skips secret handling and must
+      # not ship in release binaries.
+      - name: Build
+        run: cargo build --locked --release -p ezcrypt-cli --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: sh install/package.sh ${{ matrix.target }} dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ezcrypt-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Runs the real installers against the just-built artifacts.
+  smoke-linux-macos:
+    name: install.sh smoke (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ezcrypt-${{ matrix.target }}
+          path: dist
+      - name: Install from local artifacts
+        run: |
+          cd dist
+          if command -v sha256sum >/dev/null; then sha256sum ezcrypt-* > SHA256SUMS; else shasum -a 256 ezcrypt-* | sed 's/ \*/  /' > SHA256SUMS; fi
+          python3 -m http.server 8000 >/dev/null 2>&1 &
+          sleep 2
+          cd ..
+          EZCRYPT_BASE_URL=http://127.0.0.1:8000 sh install/install.sh
+          "$HOME/.local/bin/ezcrypt" --version
+
+  smoke-windows:
+    name: install.ps1 smoke (${{ matrix.target }})
+    needs: build
+    # Only x64 can execute here; the arm64 archive is built but not run.
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ezcrypt-${{ matrix.target }}
+          path: dist
+      - name: Install from local artifacts
+        shell: pwsh
+        run: |
+          Set-Location dist
+          Get-ChildItem ezcrypt-* | ForEach-Object {
+            "$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower())  $($_.Name)"
+          } | Set-Content -Encoding ascii SHA256SUMS
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8000' -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          Set-Location ..
+          try {
+            $env:EZCRYPT_BASE_URL = 'http://127.0.0.1:8000'
+            & ./install/install.ps1
+            & "$env:LOCALAPPDATA\Programs\ezcrypt\ezcrypt.exe" --version
+          } finally {
+            Stop-Process -Id $server.Id -Force
+          }
+
+  publish:
+    name: publish release
+    needs: [build, smoke-linux-macos, smoke-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ezcrypt-*
+          path: dist
+          merge-multiple: true
+      - name: Collect release files
+        run: |
+          cp install/install.sh install/install.ps1 dist/
+          cd dist
+          sha256sum ezcrypt-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          flags=""
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --generate-notes $flags
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/*
