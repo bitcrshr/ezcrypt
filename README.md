@@ -57,7 +57,8 @@ It prints a QR code and the same payload as text. Scan it with the Camera or the
 app's Scan action, choose which user CA to send, and tap Send. The terminal then
 shows the CA name, fingerprint, and randomart and asks you to confirm. Only after
 you accept does ezcrypt write the `TrustedUserCAKeys` configuration, validate it
-with `sshd -t` and `sshd -T`, and reload `sshd`.
+with `sshd -t` and `sshd -T`, and reload `sshd`. If `sshd` isn't running, the
+configuration is kept and applies when it starts.
 
 **Get a certificate on a client.** Run on the machine that holds the SSH key:
 
@@ -73,7 +74,8 @@ automatically.
 Only public keys and certificates cross the link. CA private keys never leave the
 phone, and the CLI never signs. Each session uses a fresh QR code carrying a
 one-time secret and expires after 10 minutes. If the phone cannot reach the machine,
-the app copies a one-line reply you can paste into the waiting CLI. See the
+the app copies a short reply, a few lines of text, that you can paste into the
+waiting CLI. See the
 [design](docs/superpowers/specs/2026-11-24-distribution-design.md) for the protocol.
 
 ## Build the app
@@ -135,7 +137,10 @@ Read [custody and formats](docs/architecture.md) for the full model.
 The Rust core, CLI, and app have automated test coverage, described in
 [validation](docs/validation.md). The interactive device validation checklist in that
 document, covering Secure Enclave signing, authentication, and Mac key operations,
-is still pending. Treat ezcrypt as pre-release and use disposable CAs until it is done.
+is still pending. The link flow (scan, deliver, trust, enroll) is covered by
+automated tests only: it hasn't yet run against a real phone, real relays, Windows,
+CI, or a release build. Treat ezcrypt as pre-release and use disposable CAs until
+this is done.
 iCloud inventory sync and cross-device signing are not implemented, and the local
 inventory JSON must not be uploaded as a sync format. Mac inventories are separate
 from iOS inventories.

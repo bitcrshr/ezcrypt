@@ -156,5 +156,7 @@ real iPhone and real machines and have NOT been run yet.
   pasting the reply into the waiting terminal.
 - [ ] Pending: open an offer from a deep link (camera app or Notes) and confirm
   the sheet opens straight to it.
+- [ ] Pending: a delivery through n0's real relays (no direct path), the CLI on
+  Windows, a CI run, and a release build of the app and CLI.
 - Known gap: if issuing ends in the pending-recovery path, the saved certificate
   has no "Send to <host>" button; deliver it by exporting from Certificates.

@@ -7,7 +7,8 @@ file sharing. Rust owns software CA generation, plaintext serialization,
 encryption/decryption, signatures, and encrypted exports. The C boundary accepts
 public JSON/ciphertext, a separate passphrase buffer, and a synchronous hardware
 callback. It returns public metadata, a certificate, or encrypted export bytes.
-There is no plaintext CA export operation in the app bridge.
+There is no plaintext CA export operation in the app bridge. A separate blocking
+link API sends public keys and certificates to a waiting computer (see Link).
 
 A hardware CA is a permanent P-256 Secure Enclave signing key identified by a
 per-CA application tag. Its public SEC1 point is passed into Rust. Rust frames the
@@ -38,13 +39,45 @@ Sensitive key operations still authenticate through the shared cryptographic act
 Mac SecItem create/load/delete operations explicitly select the data-protection
 Keychain. The signed target requests only its own app-specific Keychain group,
 App Sandbox, and user-selected read/write file access. There are no iCloud or
-network entitlements. The separate local-test entitlement file omits Keychain
+network entitlements and no URL scheme, so the Mac app has no link: its Open Link
+action is hidden. The separate local-test entitlement file omits Keychain
 access and cannot qualify hardware operation support.
 
 The local inventory schema is unchanged. Future public inventory synchronization
 must separate public records from device-wrapped software-key envelopes; copying
 this entire JSON file into iCloud is not the intended design. Cross-device signing
 authorization is a later phase, with no protocol or trust changes in this target.
+
+## Link (QR + Iroh)
+
+`ezcrypt-link` carries public keys and certificates between the app and the
+`ezcrypt` CLI; `ezcrypt-core` stays network-free. `ezcrypt trust` and
+`ezcrypt enroll` start an Iroh endpoint with a fresh key for each session and
+show an `ezcrypt://link` URL and QR code holding its endpoint ID, a 128-bit random
+secret, the host and user, and for enroll the key to sign. A session accepts at
+most one successful reply, with the secret compared in constant time, then
+closes. It times out after 10 minutes.
+
+The app reaches the link through `ezcrypt-ffi`: `ezcrypt_link_new`,
+`ezcrypt_link_deliver`, `ezcrypt_link_cancel` and `ezcrypt_link_free`. Delivery
+blocks the calling thread (never an async one) on a process-wide tokio runtime
+until the computer answers. Another thread can cancel it, and leaving the link
+sheet does. Before sending, the bridge checks the payload against the offer: a
+trust offer takes only a CA public key, and an enroll offer only a user
+certificate that verifies and is for the offered key. Both are reduced to
+`<type> <base64>` so no free text rides along. The phone uses a fresh endpoint
+key for each delivery, only dials the offer's endpoint, and never listens: it
+registers no protocol to accept. It touches the network only while a link sheet
+is open and delivering.
+
+Without a direct path, traffic goes through n0's public relays. The connection is
+encrypted QUIC to the endpoint the QR code names, so relays see metadata (endpoint
+IDs, addresses, timing, sizes) but not content.
+
+If the phone can't connect, Copy instead puts the same reply on the clipboard as
+`ezcrypt1:` and base64url JSON, broken every 64 characters because macOS
+terminals drop input lines over 1024 bytes. The CLI reads stdin alongside the
+network, joins the pasted lines, and applies the same checks.
 
 ## Envelope v1
 

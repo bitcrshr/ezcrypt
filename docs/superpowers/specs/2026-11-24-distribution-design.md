@@ -134,8 +134,10 @@ needs, and it covers machines without internet access.
 5. A session accepts at most one successful reply, then closes. Sessions time
    out after 10 minutes.
 6. **Fallback.** If dialing fails, or the user taps **Copy instead**, the app
-   copies a one-line reply (`ezcrypt1:` + base64 of the same message). The CLI
-   reads stdin concurrently and accepts a pasted reply with the same checks.
+   copies a reply (`ezcrypt1:` + base64 of the same message, broken every 64
+   characters because macOS terminals drop input lines over 1024 bytes). The
+   CLI reads stdin concurrently, joins the lines, and accepts a pasted reply
+   with the same checks.
 7. Payloads carry a version (`v=1`). Unknown versions fail with a message
    telling the user which side to update.
 
