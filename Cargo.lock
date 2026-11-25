@@ -629,6 +629,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ezcrypt-ffi"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ezcrypt-core",
+ "p256",
+ "serde",
+ "serde_json",
+ "signature",
+ "ssh-key",
+ "zeroize",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

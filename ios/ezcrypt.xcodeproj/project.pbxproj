@@ -304,7 +304,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nexport PATH=\"$HOME/.cargo/bin:$PATH\"\ncd \"$SRCROOT/..\"\nexport CARGO_HOME=\"$PWD/.build/cargo\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n cargo build --locked --target \"$RUST_TARGET\" --release\nelse\n cargo build --locked --target \"$RUST_TARGET\"\nfi\n";
+			shellScript = "set -eu\nexport PATH=\"$HOME/.cargo/bin:$PATH\"\ncd \"$SRCROOT/..\"\nexport CARGO_HOME=\"$PWD/.build/cargo\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n cargo build --locked -p ezcrypt-ffi --target \"$RUST_TARGET\" --release\nelse\n cargo build --locked -p ezcrypt-ffi --target \"$RUST_TARGET\"\nfi\n";
 		};
 		D00000000000000000000041 /* Build Rust core */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -319,7 +319,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nexport PATH=\"$HOME/.cargo/bin:$PATH\"\ncd \"$SRCROOT/..\"\nexport CARGO_HOME=\"$PWD/.build/cargo\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n cargo build --locked --target \"$RUST_TARGET\" --release\nelse\n cargo build --locked --target \"$RUST_TARGET\"\nfi\n";
+			shellScript = "set -eu\nexport PATH=\"$HOME/.cargo/bin:$PATH\"\ncd \"$SRCROOT/..\"\nexport CARGO_HOME=\"$PWD/.build/cargo\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n cargo build --locked -p ezcrypt-ffi --target \"$RUST_TARGET\" --release\nelse\n cargo build --locked -p ezcrypt-ffi --target \"$RUST_TARGET\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -452,7 +452,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-lezcrypt_core",
+					"-lezcrypt_ffi",
 					"-framework",
 					Security,
 				);
@@ -497,7 +497,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-lezcrypt_core",
+					"-lezcrypt_ffi",
 					"-framework",
 					Security,
 				);
@@ -647,7 +647,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-lezcrypt_core",
+					"-lezcrypt_ffi",
 					"-framework",
 					Security,
 				);
@@ -694,7 +694,7 @@
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-lezcrypt_core",
+					"-lezcrypt_ffi",
 					"-framework",
 					Security,
 				);

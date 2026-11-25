@@ -1,12 +1,12 @@
 //! Synchronous C boundary: JSON carries public metadata/ciphertext only.
 //! Callbacks perform hardware operations; plaintext CA keys remain in Rust.
-use crate::{
+use base64::{engine::general_purpose::STANDARD, Engine};
+use ezcrypt_core::{
     certificate::{self, Purpose, Request},
     export, invalid,
     vault::{self, Record},
     Result,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use signature::Signer;

@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 ssh-key = { version = "0.6.7", features = ["ed25519", "p256", "p384", "p521", "encryption", "getrandom"] }
