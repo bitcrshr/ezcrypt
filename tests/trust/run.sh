@@ -76,3 +76,18 @@ if out=$(docker exec "$c2" ezcrypt trust --yes --from-reply /tmp/reply.txt 2>&1)
 fi
 echo "$out" | grep -q "/etc/ssh/other" || fail "error does not mention /etc/ssh/other: $out"
 echo "PASS: shadowed setting refused"
+
+echo "== sshd not running"
+# A host where sshd has never started: no daemon, no pid file, no /run/sshd.
+c3=$(docker run -d --label "$label" -p 127.0.0.1::22 "$image" sleep infinity)
+docker exec "$c3" sh -c 'rm -rf /run/sshd /run/sshd.pid && ssh-keygen -A'
+docker cp "$work/reply.txt" "$c3:/tmp/reply.txt"
+out=$(docker exec "$c3" ezcrypt trust --yes --from-reply /tmp/reply.txt 2>&1) \
+    || fail "trust failed with sshd stopped: $out"
+echo "$out" | grep -q "sshd isn't running" || fail "no note that sshd isn't running: $out"
+docker exec "$c3" test -d /run/sshd || fail "/run/sshd was not created"
+docker exec "$c3" /usr/sbin/sshd -o PidFile=/run/sshd.pid
+wait_for_sshd "$c3"
+port=$(host_port "$c3")
+login || fail "login after starting sshd"
+echo "PASS: trust with sshd stopped"

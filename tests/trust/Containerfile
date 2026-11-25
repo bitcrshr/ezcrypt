@@ -13,4 +13,4 @@ RUN apt-get update \
     && usermod -p '*' testuser
 COPY --from=build /src/target/release/ezcrypt /usr/local/bin/ezcrypt
 EXPOSE 22
-CMD ["/bin/sh", "-c", "mkdir -p /run/sshd && ssh-keygen -A && exec /usr/sbin/sshd -D -e -o PidFile=/run/sshd.pid"]
+CMD ["/bin/sh", "-c", "ssh-keygen -A && exec /usr/sbin/sshd -D -e -o PidFile=/run/sshd.pid"]

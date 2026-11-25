@@ -24,13 +24,27 @@ const KEY_FILE: &str = "/etc/ssh/ezcrypt/trusted_user_ca_keys";
 const DROPIN_FILE: &str = "/etc/ssh/sshd_config.d/10-ezcrypt.conf";
 const SSHD_CONFIG: &str = "/etc/ssh/sshd_config";
 const INCLUDE_LINE: &str = "Include /etc/ssh/sshd_config.d/*.conf";
+/// sshd's privilege-separation directory. `sshd -t` and `-T` refuse to run
+/// without it, and it is missing on a host where sshd has never started.
+const PRIVSEP_DIR: &str = "/run/sshd";
+const PID_FILE: &str = "/run/sshd.pid";
+
+/// What `Sshd::reload` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reload {
+    Reloaded,
+    /// sshd isn't running; it reads the new configuration when it starts.
+    NotRunning,
+}
 
 pub trait Sshd {
     /// `sshd -t`
     fn test(&self) -> Result<()>;
     /// `sshd -T` value of TrustedUserCAKeys; `none` becomes `None`.
     fn effective_trusted_user_ca_keys(&self) -> Result<Option<String>>;
-    fn reload(&self) -> Result<()>;
+    /// Reloads a running sshd. Fails only if sshd is running and could not be
+    /// reloaded.
+    fn reload(&self) -> Result<Reload>;
 }
 
 pub struct SystemSshd;
@@ -72,7 +86,7 @@ impl Sshd for SystemSshd {
         Ok(parse_effective(&String::from_utf8_lossy(&out.stdout)))
     }
 
-    fn reload(&self) -> Result<()> {
+    fn reload(&self) -> Result<Reload> {
         let succeeded = |program: &str, args: &[&str]| {
             Command::new(program)
                 .args(args)
@@ -81,22 +95,33 @@ impl Sshd for SystemSshd {
                 .map(|o| o.status.success())
                 .unwrap_or(false)
         };
-        if succeeded("systemctl", &["reload", "ssh"]) || succeeded("systemctl", &["reload", "sshd"])
-        {
-            return Ok(());
-        }
-        if let Ok(pid) = fs::read_to_string("/run/sshd.pid") {
-            let pid = pid.trim();
-            if !pid.is_empty()
-                && pid.bytes().all(|b| b.is_ascii_digit())
-                && succeeded("kill", &["-HUP", pid])
-            {
-                return Ok(());
+        // A unit that is inactive or not found, or no systemctl at all, means
+        // systemd isn't running sshd.
+        let mut active = false;
+        for unit in ["ssh", "sshd"] {
+            if succeeded("systemctl", &["is-active", "--quiet", unit]) {
+                active = true;
+                if succeeded("systemctl", &["reload", unit]) {
+                    return Ok(Reload::Reloaded);
+                }
             }
         }
-        bail!(
-            "could not reload sshd (tried systemctl reload ssh/sshd and SIGHUP via /run/sshd.pid)"
-        )
+        match fs::read_to_string(PID_FILE) {
+            Ok(pid) => {
+                let pid = pid.trim();
+                if !pid.is_empty()
+                    && pid.bytes().all(|b| b.is_ascii_digit())
+                    && succeeded("kill", &["-HUP", pid])
+                {
+                    return Ok(Reload::Reloaded);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !active => {
+                return Ok(Reload::NotRunning);
+            }
+            Err(_) => {}
+        }
+        bail!("could not reload sshd (tried systemctl reload ssh/sshd and SIGHUP via {PID_FILE})")
     }
 }
 
@@ -122,6 +147,8 @@ pub struct Report {
     pub key_file: PathBuf,
     pub already_present: bool,
     pub added_include: bool,
+    /// False when sshd wasn't running, so there was nothing to reload.
+    pub reloaded: bool,
 }
 
 /// Joins an absolute path under `root`. Rejects relative paths and anything
@@ -341,13 +368,14 @@ fn run(
 ) -> Result<Report> {
     let key_path = under(root, KEY_FILE)?;
     let config_path = under(root, SSHD_CONFIG)?;
+    txn.ensure_dir(&under(root, PRIVSEP_DIR)?)?;
 
     // Read the effective setting before writing anything: an existing
     // TrustedUserCAKeys elsewhere would otherwise be overridden by our drop-in.
     let pre = sshd.effective_trusted_user_ca_keys()?;
     if let Some(existing) = pre.as_deref().filter(|p| *p != KEY_FILE) {
         if !use_existing {
-            bail!("{}", shadow_message(Some(existing)));
+            bail!("{}", shadow_message(existing));
         }
         return append_existing(txn, root, existing, line, key, sshd);
     }
@@ -386,24 +414,38 @@ fn run(
 
     let effective = sshd.effective_trusted_user_ca_keys()?;
     if effective.as_deref() == Some(KEY_FILE) {
-        sshd.reload()?;
+        let reloaded = sshd.reload()? == Reload::Reloaded;
         return Ok(Report {
             key_file: key_path,
             already_present: !added_key,
             added_include,
+            reloaded,
         });
     }
 
     // Something other than our file wins even after our change (for example an
     // earlier drop-in). Appending elsewhere would be wrong, so undo everything.
-    bail!("{}", shadow_message(effective.as_deref()))
+    // `--use-existing` can't help: before the change the effective value was
+    // ours or none.
+    bail!("{}", overridden_message(effective.as_deref()))
 }
 
-fn shadow_message(effective: Option<&str>) -> String {
+fn shadow_message(existing: &str) -> String {
     format!(
-        "TrustedUserCAKeys is already set to {}. Rerun with --use-existing to add this CA there.",
-        effective.unwrap_or("none")
+        "TrustedUserCAKeys is already set to {existing}. Rerun with --use-existing to add this CA there."
     )
+}
+
+fn overridden_message(effective: Option<&str>) -> String {
+    match effective {
+        None => "Another sshd setting keeps TrustedUserCAKeys at none, overriding ezcrypt's \
+                 drop-in. No changes were made. Remove that setting and rerun."
+            .to_string(),
+        Some(other) => format!(
+            "Another sshd setting sets TrustedUserCAKeys to {other}, overriding ezcrypt's \
+             drop-in. No changes were made. Remove that setting, or add this CA to {other} yourself."
+        ),
+    }
 }
 
 fn append_existing(
@@ -430,11 +472,12 @@ fn append_existing(
     }
     let added = append_key(txn, &target, line, key)?;
     sshd.test().context("validating sshd configuration")?;
-    sshd.reload()?;
+    let reloaded = sshd.reload()? == Reload::Reloaded;
     Ok(Report {
         key_file: target,
         already_present: !added,
         added_include: false,
+        reloaded,
     })
 }
 
@@ -503,6 +546,24 @@ fn load_reply(_: &Path) -> Result<Payload> {
     bail!("--from-reply is not available in this build")
 }
 
+/// The `[TYPE BITS]` header `ssh-keygen -lv` prints, as the app shows it.
+fn randomart_title(algorithm: &Algorithm) -> String {
+    match algorithm {
+        Algorithm::Ed25519 => "[ED25519 256]".into(),
+        Algorithm::Ecdsa { curve } => match curve {
+            ssh_key::EcdsaCurve::NistP256 => "[ECDSA 256]".into(),
+            ssh_key::EcdsaCurve::NistP384 => "[ECDSA 384]".into(),
+            ssh_key::EcdsaCurve::NistP521 => "[ECDSA 521]".into(),
+        },
+        other => format!("[{}]", other.as_str().to_uppercase()),
+    }
+}
+
+fn randomart(key: &PublicKey) -> String {
+    key.fingerprint(HashAlg::Sha256)
+        .to_randomart(&randomart_title(&key.algorithm()))
+}
+
 async fn confirm_and_install(
     payload: &Payload,
     host: &str,
@@ -519,13 +580,10 @@ async fn confirm_and_install(
     let fingerprint = key.fingerprint(HashAlg::Sha256);
     println!("CA name: {name}");
     println!("Fingerprint: {fingerprint}");
-    println!(
-        "{}",
-        fingerprint.to_randomart(&format!("{}", key.algorithm()))
-    );
+    println!("{}", randomart(&key));
     if !yes {
-        let answer = input
-            .prompt(&format!("Trust this CA for user logins on {host}? [y/N] "))
+        let question = format!("Trust this CA for user logins on {host}? [y/N] ");
+        let answer = session::or_cancel(input.prompt(&question))
             .await
             .unwrap_or_default();
         if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
@@ -544,6 +602,9 @@ async fn confirm_and_install(
     }
     if report.added_include {
         println!("Added an Include line to /etc/ssh/sshd_config.");
+    }
+    if !report.reloaded {
+        println!("sshd isn't running; the configuration applies when it starts.");
     }
     Ok((format!("Installed on {host}"), name.clone()))
 }
@@ -566,6 +627,9 @@ mod tests {
         next: Cell<usize>,
         test_fails: Cell<bool>,
         reload_fails: bool,
+        not_running: bool,
+        /// sshd's privilege-separation directory, which must exist whenever it runs.
+        privsep: Option<PathBuf>,
     }
 
     impl FakeSshd {
@@ -576,6 +640,13 @@ mod tests {
                 next: Cell::new(0),
                 test_fails: Cell::new(false),
                 reload_fails: false,
+                not_running: false,
+                privsep: None,
+            }
+        }
+        fn check_privsep(&self) {
+            if let Some(dir) = &self.privsep {
+                assert!(dir.is_dir(), "sshd ran without {}", dir.display());
             }
         }
         fn ours() -> Self {
@@ -588,6 +659,7 @@ mod tests {
 
     impl Sshd for FakeSshd {
         fn test(&self) -> anyhow::Result<()> {
+            self.check_privsep();
             self.calls.borrow_mut().push("test");
             if self.test_fails.get() {
                 anyhow::bail!("sshd -t failed");
@@ -595,17 +667,21 @@ mod tests {
             Ok(())
         }
         fn effective_trusted_user_ca_keys(&self) -> anyhow::Result<Option<String>> {
+            self.check_privsep();
             self.calls.borrow_mut().push("effective");
             let i = self.next.get();
             self.next.set(i + 1);
             Ok(self.effective[i.min(self.effective.len() - 1)].clone())
         }
-        fn reload(&self) -> anyhow::Result<()> {
+        fn reload(&self) -> anyhow::Result<Reload> {
             self.calls.borrow_mut().push("reload");
+            if self.not_running {
+                return Ok(Reload::NotRunning);
+            }
             if self.reload_fails {
                 anyhow::bail!("reload failed");
             }
-            Ok(())
+            Ok(Reload::Reloaded)
         }
     }
 
@@ -655,6 +731,7 @@ mod tests {
         let r = install(d.path(), &line, "my-ca", false, &sshd).unwrap();
         assert!(!r.already_present);
         assert!(r.added_include);
+        assert!(r.reloaded);
         assert_eq!(r.key_file, d.path().join(KEYFILE));
         let keys = read(d.path(), KEYFILE);
         let expected = format!(
@@ -761,9 +838,13 @@ mod tests {
         let before = tree(d.path());
         let sshd = FakeSshd::new(None);
         let e = install(d.path(), &ca_line(""), "ca", false, &sshd).unwrap_err();
-        assert!(format!("{e}").contains("already set to none."));
+        assert_eq!(format!("{e}"), OVERRIDDEN_BY_NONE);
         assert_eq!(tree(d.path()), before);
     }
+
+    /// `--use-existing` cannot help when the effective value is `none`.
+    const OVERRIDDEN_BY_NONE: &str = "Another sshd setting keeps TrustedUserCAKeys at none, \
+        overriding ezcrypt's drop-in. No changes were made. Remove that setting and rerun.";
 
     #[test]
     fn use_existing_appends_to_effective_file() {
@@ -793,7 +874,8 @@ mod tests {
         let d = setup(SSHD_CONFIG);
         let before = tree(d.path());
         let sshd = FakeSshd::new(None);
-        assert!(install(d.path(), &ca_line(""), "ca", true, &sshd).is_err());
+        let e = install(d.path(), &ca_line(""), "ca", true, &sshd).unwrap_err();
+        assert_eq!(format!("{e}"), OVERRIDDEN_BY_NONE);
         assert_eq!(tree(d.path()), before);
         assert!(!sshd.calls().contains(&"reload"));
     }
@@ -815,8 +897,56 @@ mod tests {
         let before = tree(d.path());
         let mut sshd = FakeSshd::ours();
         sshd.reload_fails = true;
-        assert!(install(d.path(), &ca_line(""), "ca", false, &sshd).is_err());
+        let e = install(d.path(), &ca_line(""), "ca", false, &sshd).unwrap_err();
+        assert_eq!(format!("{e}"), "reload failed");
         assert_eq!(tree(d.path()), before);
+        assert_eq!(
+            sshd.calls(),
+            vec!["effective", "test", "effective", "reload"]
+        );
+    }
+
+    #[test]
+    fn failed_reload_with_use_existing_restores_the_file() {
+        let d = setup(SSHD_CONFIG);
+        std::fs::write(d.path().join("etc/ssh/other_ca"), "ssh-ed25519 AAAA old\n").unwrap();
+        let before = tree(d.path());
+        let mut sshd = FakeSshd::new(Some("/etc/ssh/other_ca"));
+        sshd.reload_fails = true;
+        assert!(install(d.path(), &ca_line(""), "ca", true, &sshd).is_err());
+        assert_eq!(tree(d.path()), before);
+    }
+
+    #[test]
+    fn sshd_not_running_keeps_the_change() {
+        let d = setup(SSHD_CONFIG);
+        let mut sshd = FakeSshd::ours();
+        sshd.not_running = true;
+        let r = install(d.path(), &ca_line(""), "ca", false, &sshd).unwrap();
+        assert!(!r.reloaded);
+        assert!(!r.already_present);
+        assert!(read(d.path(), KEYFILE).ends_with(" ca\n"));
+        assert!(
+            d.path()
+                .join("etc/ssh/sshd_config.d/10-ezcrypt.conf")
+                .exists()
+        );
+        assert!(read(d.path(), "etc/ssh/sshd_config").starts_with(INCLUDE_LINE));
+        assert_eq!(
+            sshd.calls(),
+            vec!["effective", "test", "effective", "reload"]
+        );
+    }
+
+    #[test]
+    fn sshd_not_running_with_use_existing_keeps_the_change() {
+        let d = setup(SSHD_CONFIG);
+        std::fs::write(d.path().join("etc/ssh/other_ca"), "ssh-ed25519 AAAA old\n").unwrap();
+        let mut sshd = FakeSshd::new(Some("/etc/ssh/other_ca"));
+        sshd.not_running = true;
+        let r = install(d.path(), &ca_line(""), "ca", true, &sshd).unwrap();
+        assert!(!r.reloaded);
+        assert!(read(d.path(), "etc/ssh/other_ca").ends_with(" ca\n"));
     }
 
     #[test]
@@ -937,7 +1067,14 @@ mod tests {
         sshd.effective = vec![None, Some("/etc/ssh/winner".into())];
         for use_existing in [false, true] {
             let e = install(d.path(), &ca_line(""), "ca", use_existing, &sshd).unwrap_err();
-            assert!(format!("{e}").contains("already set to /etc/ssh/winner"));
+            // Rerunning with --use-existing would fail the same way: before our
+            // change the effective value is not /etc/ssh/winner.
+            assert_eq!(
+                format!("{e}"),
+                "Another sshd setting sets TrustedUserCAKeys to /etc/ssh/winner, \
+                 overriding ezcrypt's drop-in. No changes were made. \
+                 Remove that setting, or add this CA to /etc/ssh/winner yourself."
+            );
             assert_eq!(tree(d.path()), before);
             sshd.next.set(0);
         }
@@ -1012,5 +1149,60 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[test]
+    fn privsep_dir_is_created_before_sshd_runs() {
+        let d = setup(SSHD_CONFIG);
+        let mut sshd = FakeSshd::ours();
+        sshd.privsep = Some(d.path().join("run/sshd"));
+        install(d.path(), &ca_line(""), "ca", false, &sshd).unwrap();
+        assert!(d.path().join("run/sshd").is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(d.path().join("run/sshd"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+        // An existing directory is fine.
+        let line = ca_line("");
+        let r = install(d.path(), &line, "ca2", false, &sshd).unwrap();
+        assert!(!r.already_present);
+    }
+
+    #[test]
+    fn randomart_header_matches_the_app() {
+        use ssh_key::EcdsaCurve;
+        for (algorithm, top) in [
+            (Algorithm::Ed25519, "+--[ED25519 256]--+"),
+            (
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP256,
+                },
+                "+---[ECDSA 256]---+",
+            ),
+            (
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP384,
+                },
+                "+---[ECDSA 384]---+",
+            ),
+            (
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP521,
+                },
+                "+---[ECDSA 521]---+",
+            ),
+        ] {
+            let key = PrivateKey::random(&mut OsRng, algorithm).unwrap();
+            let art = randomart(key.public_key());
+            let lines: Vec<&str> = art.lines().collect();
+            assert_eq!(lines[0], top);
+            assert_eq!(lines.len(), 11);
+            assert_eq!(lines[10], "+----[SHA256]-----+");
+        }
     }
 }
