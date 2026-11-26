@@ -48,6 +48,9 @@ jobs:
       - name: Package
         shell: bash
         run: sh install/package.sh ${{ matrix.target }} dist
+      - name: Package .deb
+        if: contains(matrix.target, 'linux-musl')
+        run: sh install/package-deb.sh dist/ezcrypt-${{ matrix.target }}.tar.gz "${GITHUB_REF_NAME#v}" dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ezcrypt-${{ matrix.target }}
@@ -82,6 +85,36 @@ jobs:
           v=$("$HOME/.local/bin/ezcrypt" --version)
           echo "$v"
           case "$v" in *"${GITHUB_REF_NAME#v}"*) ;; *) echo "version '$v' does not contain '${GITHUB_REF_NAME#v}'" >&2; exit 1 ;; esac
+
+  smoke-deb:
+    name: .deb smoke (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl, arch: amd64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, arch: arm64 }
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ezcrypt-${{ matrix.target }}
+          path: dist
+      - name: Install, run, and remove on Ubuntu
+        env:
+          DEB: dist/ezcrypt-${{ matrix.arch }}.deb
+        run: |
+          dpkg-deb --info "$DEB"
+          sudo apt-get install -y "./$DEB"
+          v=$(/usr/bin/ezcrypt --version)
+          echo "$v"
+          case "$v" in *"${GITHUB_REF_NAME#v}"*) ;; *) echo "version '$v' does not contain '${GITHUB_REF_NAME#v}'" >&2; exit 1 ;; esac
+          sudo apt-get remove -y ezcrypt
+          if [ -e /usr/bin/ezcrypt ]; then echo "/usr/bin/ezcrypt left behind after remove" >&2; exit 1; fi
+      # The oldest dpkg the package targets.
+      - name: Install and run on Debian 12
+        run: docker run --rm -v "$PWD/dist:/dist:ro" debian:12-slim sh -c 'dpkg -i /dist/ezcrypt-${{ matrix.arch }}.deb && ezcrypt --version'
 
   smoke-windows:
     name: install.ps1 smoke (${{ matrix.target }})
@@ -122,7 +155,7 @@ jobs:
 
   publish:
     name: publish release
-    needs: [build, smoke-linux-macos, smoke-windows]
+    needs: [build, smoke-linux-macos, smoke-deb, smoke-windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

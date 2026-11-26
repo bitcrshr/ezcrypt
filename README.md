@@ -33,6 +33,10 @@ first tag; until then, build from source (below).
 # Linux and macOS
 curl -fsSL https://github.com/bitcrshr/ezcrypt/releases/latest/download/install.sh | sh
 
+# Debian and Ubuntu (amd64 or arm64)
+curl -fsSLO https://github.com/bitcrshr/ezcrypt/releases/latest/download/ezcrypt-$(dpkg --print-architecture).deb
+sudo apt install ./ezcrypt-$(dpkg --print-architecture).deb
+
 # Windows (PowerShell)
 irm https://github.com/bitcrshr/ezcrypt/releases/latest/download/install.ps1 | iex
 
