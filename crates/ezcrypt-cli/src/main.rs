@@ -1,5 +1,6 @@
 mod enroll;
 mod input;
+mod privilege;
 mod qr;
 mod session;
 mod trust;

@@ -40,8 +40,25 @@ pub async fn run(check: bool) -> Result<()> {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is semver");
     let release = Release::new(REPO, true)?;
     let install = Install::detect(&exe, Path::new(DPKG_LIST));
-    update(&release, &exe, &current, check, install).await
+    let result = update(&release, &exe, &current, check, install).await;
+    if let Some(NeedsRoot(why)) = result.as_ref().err().and_then(|e| e.downcast_ref()) {
+        return crate::privilege::escalate(why);
+    }
+    result
 }
+
+/// Updating needs root, and this isn't root: `run` reruns ezcrypt with sudo.
+/// Holds the sentence explaining why.
+#[derive(Debug)]
+struct NeedsRoot(String);
+
+impl std::fmt::Display for NeedsRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} Rerun with sudo: sudo ezcrypt update", self.0)
+    }
+}
+
+impl std::error::Error for NeedsRoot {}
 
 /// How this copy of ezcrypt was installed, which decides how to update it.
 #[derive(Debug, PartialEq)]
@@ -99,8 +116,11 @@ async fn update(
             exe.display()
         ),
         Install::Deb => {
-            if !crate::trust::is_root()? {
-                bail!("ezcrypt was installed from the .deb. Update it with: sudo ezcrypt update");
+            if !crate::privilege::is_root()? {
+                return Err(NeedsRoot(
+                    "This ezcrypt was installed from the .deb, so updating it needs root.".into(),
+                )
+                .into());
             }
             let name = deb_name().ok_or_else(|| anyhow!("no .deb is published for this CPU"))?;
             let deb = release.verified(&tag, name).await?;
@@ -121,6 +141,11 @@ async fn update(
         }
         Install::Standalone => {
             let name = asset_name().ok_or_else(|| anyhow!("no release build for this platform"))?;
+            // Find out about permissions before downloading anything.
+            let dir = exe
+                .parent()
+                .ok_or_else(|| anyhow!("cannot locate the directory of {}", exe.display()))?;
+            tempfile::tempfile_in(dir).map_err(|e| not_writable(e, dir))?;
             let archive = release.verified(&tag, name).await?;
             let binary = extract(&archive)?;
             replace_exe(exe, &binary, &latest)?;
@@ -411,16 +436,16 @@ fn aside_path(exe: &Path) -> PathBuf {
 }
 
 fn not_writable(e: std::io::Error, dir: &Path) -> anyhow::Error {
-    if e.kind() == std::io::ErrorKind::PermissionDenied {
-        let how = if cfg!(windows) {
-            "Rerun from an elevated terminal."
-        } else {
-            "Rerun with sudo: sudo ezcrypt update"
-        };
-        anyhow!("cannot write to {}. {how}", dir.display())
-    } else {
-        anyhow::Error::new(e).context(format!("cannot write to {}", dir.display()))
+    if e.kind() == std::io::ErrorKind::PermissionDenied
+        && (cfg!(windows) || !crate::privilege::is_root().unwrap_or(true))
+    {
+        return NeedsRoot(format!(
+            "ezcrypt update needs root to write to {}.",
+            dir.display()
+        ))
+        .into();
     }
+    anyhow::Error::new(e).context(format!("cannot write to {}", dir.display()))
 }
 
 /// Run `bin --version` and require exactly `ezcrypt <want>`.
@@ -852,8 +877,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn read_only_directory_suggests_sudo() {
-            if crate::trust::is_root().unwrap() {
+        async fn read_only_directory_asks_for_root_before_downloading() {
+            if crate::privilege::is_root().unwrap() {
                 return; // root can write anywhere
             }
             let server = serve(
@@ -867,8 +892,29 @@ mod tests {
                 .await
                 .unwrap_err();
             fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
-            assert!(err.to_string().contains("sudo ezcrypt update"), "{err}");
+            let NeedsRoot(why) = err.downcast_ref().expect("asks for root");
+            assert!(why.contains("needs root to write to"), "{why}");
             assert_eq!(version_of(&exe), "ezcrypt 0.1.0");
+            assert_eq!(*server.requests.lock().unwrap(), ["/releases/latest"]);
+        }
+
+        #[tokio::test]
+        async fn deb_install_asks_for_root_before_downloading() {
+            if crate::privilege::is_root().unwrap() {
+                return;
+            }
+            let server = serve(
+                "/releases/tag/v0.2.0",
+                release("v0.2.0", &script("0.2.0"), None),
+            )
+            .await;
+            let (_dir, exe) = installed("0.1.0");
+            let err = run(&server, &exe, "0.1.0", false, Install::Deb)
+                .await
+                .unwrap_err();
+            let NeedsRoot(why) = err.downcast_ref().expect("asks for root");
+            assert!(why.contains("installed from the .deb"), "{why}");
+            assert_eq!(*server.requests.lock().unwrap(), ["/releases/latest"]);
         }
     }
 }

@@ -18,6 +18,7 @@ use ssh_key::{Algorithm, HashAlg, PublicKey};
 
 use crate::enroll::{hostname, suggested_user};
 use crate::input::Input;
+use crate::privilege;
 use crate::session;
 
 const KEY_FILE: &str = "/etc/ssh/ezcrypt/trusted_user_ca_keys";
@@ -538,8 +539,10 @@ pub async fn command(
     if !cfg!(target_os = "linux") {
         bail!("ezcrypt trust supports Linux servers only.");
     }
-    if !is_root()? {
-        return escalate();
+    if !privilege::is_root()? {
+        return privilege::escalate(
+            "ezcrypt trust changes sshd's configuration, so it needs root.",
+        );
     }
     // Fail now, not after the phone has sent its key.
     preflight(Path::new("/"), use_existing, &SystemSshd)?;
@@ -571,44 +574,6 @@ pub async fn command(
         "Users can now log in with certificates from {name} whose principals match their account names."
     );
     Ok(())
-}
-
-/// Rerun this binary as root with the same arguments. Uses our own absolute
-/// path because `sudo ezcrypt` fails when ezcrypt is in ~/.local/bin, which
-/// sudo's secure_path leaves out.
-#[cfg(unix)]
-fn escalate() -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    let exe = std::env::current_exe().context("cannot locate the running ezcrypt")?;
-    let on_path = |program: &str| {
-        std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join(program).is_file()))
-    };
-    let Some(tool) = ["sudo", "doas"].into_iter().find(|t| on_path(t)) else {
-        bail!("ezcrypt trust needs root, and neither sudo nor doas was found. Run it as root.");
-    };
-    eprintln!(
-        "ezcrypt trust changes sshd's configuration, so it needs root. Running it with {tool}."
-    );
-    // exec only returns if it failed.
-    let err = Command::new(tool)
-        .arg(&exe)
-        .args(std::env::args_os().skip(1))
-        .exec();
-    Err(anyhow!(err).context(format!("cannot run {tool}")))
-}
-
-#[cfg(not(unix))]
-fn escalate() -> Result<()> {
-    bail!("ezcrypt trust needs root.")
-}
-
-pub(crate) fn is_root() -> Result<bool> {
-    let out = Command::new("id")
-        .arg("-u")
-        .output()
-        .context("cannot run id")?;
-    Ok(String::from_utf8_lossy(&out.stdout).trim() == "0")
 }
 
 #[cfg(feature = "test-hooks")]
