@@ -446,10 +446,6 @@ fn check_version(bin: &Path, want: &Version) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
-    }
-
     fn tar_gz(name: &str, data: &[u8], kind: tar::EntryType) -> Vec<u8> {
         let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
             Vec::new(),
@@ -619,6 +615,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::Mutex;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
 
         struct Server {
             base: String,
