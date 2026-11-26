@@ -3,6 +3,7 @@ mod input;
 mod qr;
 mod session;
 mod trust;
+mod update;
 
 use std::path::PathBuf;
 
@@ -38,6 +39,12 @@ enum Command {
         #[arg(long, hide = true)]
         from_reply: Option<PathBuf>,
     },
+    /// Update ezcrypt to the latest release
+    Update {
+        /// Only report whether a newer release exists
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[tokio::main]
@@ -56,6 +63,7 @@ async fn main() {
             let from_reply = None;
             trust::command(yes, use_existing, from_reply, &mut input).await
         }
+        Command::Update { check } => update::run(check).await,
     };
     if let Err(e) = result {
         eprintln!("Error: {e:#}");

@@ -524,7 +524,7 @@ pub async fn command(
     Ok(())
 }
 
-fn is_root() -> Result<bool> {
+pub(crate) fn is_root() -> Result<bool> {
     let out = Command::new("id")
         .arg("-u")
         .output()

@@ -22,7 +22,23 @@ qrcode = { version = "0.14", default-features = false }
 tempfile = "3"
 anyhow = "1"
 gethostname = "1"
+# `update`: the same HTTP and TLS stack iroh already builds (rustls + ring).
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
+semver = "1"
+sha2 = "0.10"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+
+[target.'cfg(not(windows))'.dependencies]
+tar = { version = "0.4", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
+# Both archive formats are unit-tested on every platform.
+tar = { version = "0.4", default-features = false }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 rand = "0.8"
 ssh-key = { version = "0.6.7", features = ["ed25519", "p256", "p384", "p521", "getrandom"] }

@@ -22,6 +22,12 @@ test-core:
 test-trust:
     tests/trust/run.sh
 
+# Run the CLI from source: `just cli enroll --key /tmp/k`, `just cli update --check`.
+[no-cd]
+[positional-arguments]
+cli *args:
+    @cargo run --locked -q -p ezcrypt-cli -- "$@"
+
 # Build the iOS app for an Apple Silicon Simulator.
 build-ios:
     id=$(xcrun simctl list devices available | awk -F'[()]' '/ {{simulator}} \(/{print $2; exit}'); [ -n "$id" ] || { echo "No available Simulator named {{simulator}}" >&2; exit 1; }; xcodebuild -project {{project}} -scheme ezcrypt -configuration Debug -destination "platform=iOS Simulator,id=$id" -derivedDataPath .build/xcode build

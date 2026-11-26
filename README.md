@@ -26,8 +26,9 @@ CA public key or signed certificate is installed for you.
 ## Install the CLI
 
 The `ezcrypt` CLI runs `trust` on Linux servers and `enroll` on Linux, macOS,
-and Windows clients. Release binaries and installers are published with the
-first tag; until then, build from source (below).
+and Windows clients. Each [release](https://github.com/bitcrshr/ezcrypt/releases)
+has static Linux binaries and `.deb` packages for amd64 and arm64, plus macOS
+(Apple silicon) and Windows builds, all listed in `SHA256SUMS`.
 
 ```sh
 # Linux and macOS
@@ -45,6 +46,11 @@ nix run github:bitcrshr/ezcrypt
 ```
 
 From source, with the pinned Rust toolchain: `cargo install --locked --path crates/ezcrypt-cli`.
+
+To update later, run `ezcrypt update` (`sudo ezcrypt update` if you installed the
+`.deb` or into `/usr/local/bin`). It installs the latest release only after its
+checksum matches `SHA256SUMS`, and `ezcrypt update --check` just reports whether
+one is available. Nix installs update through Nix.
 
 ## Quickstart
 
