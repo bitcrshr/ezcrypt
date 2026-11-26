@@ -450,10 +450,18 @@ fn not_writable(e: std::io::Error, dir: &Path) -> anyhow::Error {
 
 /// Run `bin --version` and require exactly `ezcrypt <want>`.
 fn check_version(bin: &Path, want: &Version) -> Result<()> {
-    let out = Command::new(bin)
-        .arg("--version")
-        .output()
-        .with_context(|| format!("cannot run {}", bin.display()))?;
+    let mut busy = 0;
+    let out = loop {
+        match Command::new(bin).arg("--version").output() {
+            // ETXTBSY: a process forked by another thread can hold the file
+            // we just wrote open until it execs. It clears within moments.
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 40 => {
+                busy += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            result => break result.with_context(|| format!("cannot run {}", bin.display()))?,
+        }
+    };
     let text = String::from_utf8_lossy(&out.stdout);
     let got = text
         .trim()
