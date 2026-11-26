@@ -47,10 +47,10 @@ nix run github:bitcrshr/ezcrypt
 
 From source, with the pinned Rust toolchain: `cargo install --locked --path crates/ezcrypt-cli`.
 
-To update later, run `ezcrypt update` (`sudo ezcrypt update` if you installed the
-`.deb` or into `/usr/local/bin`). It installs the latest release only after its
-checksum matches `SHA256SUMS`, and `ezcrypt update --check` just reports whether
-one is available. Nix installs update through Nix.
+To update later, run `ezcrypt update`. It installs the latest release only after
+its checksum matches `SHA256SUMS`, and reruns itself with `sudo` when it needs
+root (for the `.deb`, or a copy in `/usr/local/bin`). `ezcrypt update --check`
+just reports whether a newer release exists. Nix installs update through Nix.
 
 ## Quickstart
 
