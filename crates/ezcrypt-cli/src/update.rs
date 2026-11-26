@@ -253,7 +253,7 @@ fn tls_config() -> Result<rustls::ClientConfig> {
         .with_safe_default_protocol_versions()
         .context("cannot set up TLS")?
         .with_platform_verifier()
-        .context("cannot load the system's TLS root certificates")?
+        .context("cannot load the system's TLS root certificates (on Debian or Ubuntu: apt install ca-certificates)")?
         .with_no_client_auth())
 }
 
