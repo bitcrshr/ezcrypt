@@ -59,7 +59,8 @@ impl SystemSshd {
                 Err(e) => return Err(anyhow!(e).context(format!("running {bin}"))),
             }
         }
-        Err(anyhow!(last.expect("two candidates tried")).context("could not find sshd"))
+        Err(anyhow!(last.expect("two candidates tried"))
+            .context("could not find sshd; is OpenSSH server installed?"))
     }
 }
 
@@ -336,10 +337,6 @@ pub fn install(
     let mut key = parse_ca(ca_line)?;
     key.set_comment(ca_name);
     let line = key.to_openssh().context("formatting CA key")?;
-    let config_path = under(root, SSHD_CONFIG)?;
-    if !config_path.is_file() {
-        bail!("{SSHD_CONFIG} not found; is OpenSSH server installed?");
-    }
 
     let mut txn = Txn::default();
     match run(&mut txn, root, &key, &line, use_existing, sshd) {
@@ -366,34 +363,15 @@ fn run(
     use_existing: bool,
     sshd: &dyn Sshd,
 ) -> Result<Report> {
+    let (config, added_include) = match plan(txn, root, use_existing, sshd)? {
+        Plan::Existing(target) => return append_existing(txn, &target, line, key, sshd),
+        Plan::Ours {
+            config,
+            added_include,
+        } => (config, added_include),
+    };
     let key_path = under(root, KEY_FILE)?;
     let config_path = under(root, SSHD_CONFIG)?;
-    txn.ensure_dir(&under(root, PRIVSEP_DIR)?)?;
-
-    // Read the effective setting before writing anything: an existing
-    // TrustedUserCAKeys elsewhere would otherwise be overridden by our drop-in.
-    let pre = sshd.effective_trusted_user_ca_keys()?;
-    if let Some(existing) = pre.as_deref().filter(|p| *p != KEY_FILE) {
-        if !use_existing {
-            bail!("{}", shadow_message(existing));
-        }
-        return append_existing(txn, root, existing, line, key, sshd);
-    }
-
-    refuse_symlink(&key_path, "our CA key file")?;
-    refuse_symlink(&under(root, DROPIN_FILE)?, "our sshd drop-in")?;
-    let config = fs::read(&config_path).with_context(|| format!("reading {SSHD_CONFIG}"))?;
-    let added_include = !has_include(&String::from_utf8_lossy(&config));
-    if added_include
-        && fs::symlink_metadata(&config_path)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-    {
-        bail!(
-            "{SSHD_CONFIG} is a symlink, so it is managed elsewhere (for example NixOS). \
-             Add `{INCLUDE_LINE}` to it there and rerun."
-        );
-    }
 
     let added_key = append_key(txn, &key_path, line, key)?;
 
@@ -430,6 +408,71 @@ fn run(
     bail!("{}", overridden_message(effective.as_deref()))
 }
 
+/// What installing will do, decided from the current configuration alone.
+enum Plan {
+    /// Our key file and drop-in. `config` is sshd_config as read.
+    Ours {
+        config: Vec<u8>,
+        added_include: bool,
+    },
+    /// `--use-existing`: append to the TrustedUserCAKeys file already in effect.
+    Existing(PathBuf),
+}
+
+/// Every check that doesn't depend on the CA key. Writes nothing except
+/// sshd's privilege-separation directory (through `txn`), which `sshd -T`
+/// needs.
+fn plan(txn: &mut Txn, root: &Path, use_existing: bool, sshd: &dyn Sshd) -> Result<Plan> {
+    let config_path = under(root, SSHD_CONFIG)?;
+    if !config_path.is_file() {
+        bail!("{SSHD_CONFIG} not found; is OpenSSH server installed?");
+    }
+    txn.ensure_dir(&under(root, PRIVSEP_DIR)?)?;
+
+    // Read the effective setting before writing anything: an existing
+    // TrustedUserCAKeys elsewhere would otherwise be overridden by our drop-in.
+    let pre = sshd
+        .effective_trusted_user_ca_keys()
+        .context("checking sshd's current configuration")?;
+    if let Some(existing) = pre.as_deref().filter(|p| *p != KEY_FILE) {
+        if !use_existing {
+            bail!("{}", shadow_message(existing));
+        }
+        return Ok(Plan::Existing(existing_target(root, existing)?));
+    }
+
+    refuse_symlink(&under(root, KEY_FILE)?, "our CA key file")?;
+    refuse_symlink(&under(root, DROPIN_FILE)?, "our sshd drop-in")?;
+    let config = fs::read(&config_path).with_context(|| format!("reading {SSHD_CONFIG}"))?;
+    let added_include = !has_include(&String::from_utf8_lossy(&config));
+    if added_include
+        && fs::symlink_metadata(&config_path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+    {
+        bail!(
+            "{SSHD_CONFIG} is a symlink, so it is managed elsewhere (for example NixOS). \
+             Add `{INCLUDE_LINE}` to it there and rerun."
+        );
+    }
+    Ok(Plan::Ours {
+        config,
+        added_include,
+    })
+}
+
+/// Runs the checks `install` will run, before the phone session, so a host
+/// that can't be configured fails before anything is scanned. Leaves the
+/// system as it was.
+pub fn preflight(root: &Path, use_existing: bool, sshd: &dyn Sshd) -> Result<()> {
+    let mut txn = Txn::default();
+    let result = plan(&mut txn, root, use_existing, sshd).map(drop);
+    // Only the privilege-separation directory can have been created; failing
+    // to remove it again is harmless, and install recreates it anyway.
+    let _ = txn.restore();
+    result
+}
+
 fn shadow_message(existing: &str) -> String {
     format!(
         "TrustedUserCAKeys is already set to {existing}. Rerun with --use-existing to add this CA there."
@@ -448,14 +491,8 @@ fn overridden_message(effective: Option<&str>) -> String {
     }
 }
 
-fn append_existing(
-    txn: &mut Txn,
-    root: &Path,
-    existing: &str,
-    line: &str,
-    key: &PublicKey,
-    sshd: &dyn Sshd,
-) -> Result<Report> {
+/// The TrustedUserCAKeys file already in effect, if it is a regular file.
+fn existing_target(root: &Path, existing: &str) -> Result<PathBuf> {
     let target = under(root, existing)?;
     match fs::symlink_metadata(&target) {
         Ok(m) if m.file_type().is_file() => {}
@@ -470,11 +507,21 @@ fn append_existing(
             )));
         }
     }
-    let added = append_key(txn, &target, line, key)?;
+    Ok(target)
+}
+
+fn append_existing(
+    txn: &mut Txn,
+    target: &Path,
+    line: &str,
+    key: &PublicKey,
+    sshd: &dyn Sshd,
+) -> Result<Report> {
+    let added = append_key(txn, target, line, key)?;
     sshd.test().context("validating sshd configuration")?;
     let reloaded = sshd.reload()? == Reload::Reloaded;
     Ok(Report {
-        key_file: target,
+        key_file: target.to_path_buf(),
         already_present: !added,
         added_include: false,
         reloaded,
@@ -492,8 +539,10 @@ pub async fn command(
         bail!("ezcrypt trust supports Linux servers only.");
     }
     if !is_root()? {
-        bail!("Run with sudo: sudo ezcrypt trust");
+        return escalate();
     }
+    // Fail now, not after the phone has sent its key.
+    preflight(Path::new("/"), use_existing, &SystemSshd)?;
     let host = hostname();
     let (payload, received) = match from_reply {
         Some(path) => (load_reply(&path)?, None),
@@ -522,6 +571,36 @@ pub async fn command(
         "Users can now log in with certificates from {name} whose principals match their account names."
     );
     Ok(())
+}
+
+/// Rerun this binary as root with the same arguments. Uses our own absolute
+/// path because `sudo ezcrypt` fails when ezcrypt is in ~/.local/bin, which
+/// sudo's secure_path leaves out.
+#[cfg(unix)]
+fn escalate() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().context("cannot locate the running ezcrypt")?;
+    let on_path = |program: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join(program).is_file()))
+    };
+    let Some(tool) = ["sudo", "doas"].into_iter().find(|t| on_path(t)) else {
+        bail!("ezcrypt trust needs root, and neither sudo nor doas was found. Run it as root.");
+    };
+    eprintln!(
+        "ezcrypt trust changes sshd's configuration, so it needs root. Running it with {tool}."
+    );
+    // exec only returns if it failed.
+    let err = Command::new(tool)
+        .arg(&exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    Err(anyhow!(err).context(format!("cannot run {tool}")))
+}
+
+#[cfg(not(unix))]
+fn escalate() -> Result<()> {
+    bail!("ezcrypt trust needs root.")
 }
 
 pub(crate) fn is_root() -> Result<bool> {
@@ -990,6 +1069,80 @@ mod tests {
         let before = tree(d.path());
         assert!(install(d.path(), &ca_line(""), "ca", false, &FakeSshd::ours()).is_err());
         assert_eq!(tree(d.path()), before);
+    }
+
+    /// sshd isn't installed (or `sshd -T` can't run).
+    struct NoSshd;
+
+    impl Sshd for NoSshd {
+        fn test(&self) -> anyhow::Result<()> {
+            anyhow::bail!("could not find sshd")
+        }
+        fn effective_trusted_user_ca_keys(&self) -> anyhow::Result<Option<String>> {
+            anyhow::bail!("could not find sshd")
+        }
+        fn reload(&self) -> anyhow::Result<Reload> {
+            anyhow::bail!("could not find sshd")
+        }
+    }
+
+    #[test]
+    fn preflight_passes_and_leaves_everything_as_it_was() {
+        for effective in [None, Some(OURS)] {
+            let d = setup(SSHD_CONFIG);
+            let before = tree(d.path());
+            let mut sshd = FakeSshd::new(effective);
+            sshd.privsep = Some(d.path().join("run/sshd"));
+            preflight(d.path(), false, &sshd).unwrap();
+            assert_eq!(tree(d.path()), before, "privsep dir removed again");
+            assert_eq!(sshd.calls(), ["effective"]);
+        }
+    }
+
+    #[test]
+    fn preflight_refuses_what_install_would_refuse() {
+        let d = setup(SSHD_CONFIG);
+        let before = tree(d.path());
+        let shadowed = FakeSshd::new(Some("/etc/ssh/other_ca"));
+        let e = preflight(d.path(), false, &shadowed).unwrap_err();
+        assert!(format!("{e}").contains("Rerun with --use-existing"), "{e}");
+        // --use-existing needs the file in effect to exist.
+        let e = preflight(d.path(), true, &shadowed).unwrap_err();
+        assert!(format!("{e:#}").contains("cannot be read"), "{e:#}");
+        assert_eq!(tree(d.path()), before);
+        std::fs::write(d.path().join("etc/ssh/other_ca"), "").unwrap();
+        preflight(d.path(), true, &shadowed).unwrap();
+    }
+
+    #[test]
+    fn preflight_reports_a_missing_openssh_server() {
+        let d = tempfile::tempdir().unwrap();
+        let e = preflight(d.path(), false, &NoSshd).unwrap_err();
+        assert!(
+            format!("{e}").contains("is OpenSSH server installed?"),
+            "{e}"
+        );
+        let d = setup(SSHD_CONFIG);
+        let before = tree(d.path());
+        let e = preflight(d.path(), false, &NoSshd).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "checking sshd's current configuration: could not find sshd"
+        );
+        assert_eq!(tree(d.path()), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_refuses_a_symlinked_config_that_needs_include() {
+        let d = setup("");
+        let real = d.path().join("real_config");
+        std::fs::write(&real, "Port 22\n").unwrap();
+        let link = d.path().join("etc/ssh/sshd_config");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let e = preflight(d.path(), false, &FakeSshd::new(None)).unwrap_err();
+        assert!(format!("{e}").contains("managed elsewhere"), "{e}");
     }
 
     #[test]

@@ -150,8 +150,9 @@ real iPhone and real machines and have NOT been run yet.
   the code, sign with Face ID, and confirm `ssh` uses the delivered certificate.
 - [ ] Pending: enroll from a Linux VM. Same flow, confirming the certificate is
   installed and `ssh` offers it.
-- [ ] Pending: trust. Run `sudo ezcrypt trust` on the VM, send a user CA from the
-  phone, and confirm a real login with a certificate from that CA.
+- [ ] Pending: trust. Run `ezcrypt trust` on the VM as a normal user (it should
+  rerun itself with sudo), send a user CA from the phone, and confirm a real
+  login with a certificate from that CA.
 - [ ] Pending: paste. Repeat the enroll and trust flows using "Copy instead" and
   pasting the reply into the waiting terminal.
 - [ ] Pending: open an offer from a deep link (camera app or Notes) and confirm

@@ -60,8 +60,14 @@ user CA.
 **Trust a CA on a server.** Run on the server:
 
 ```sh
-sudo ezcrypt trust
+ezcrypt trust
 ```
+
+It needs root to change sshd's configuration, so unless you're already root it
+reruns itself with `sudo` (or `doas`). This works even when ezcrypt is in
+`~/.local/bin`, which `sudo ezcrypt` can't find. Before showing anything to
+scan, it checks that OpenSSH server is installed and that no other
+`TrustedUserCAKeys` setting is in the way.
 
 It prints a QR code and the same payload as text. Scan it with the Camera or the
 app's Scan action, choose which user CA to send, and tap Send. The terminal then

@@ -77,6 +77,23 @@ fi
 echo "$out" | grep -q "/etc/ssh/other" || fail "error does not mention /etc/ssh/other: $out"
 echo "PASS: shadowed setting refused"
 
+# Without --from-reply, trust would start a phone session and print a QR code;
+# checks that don't need the CA key must fail before that.
+no_session() {
+    local id=$1 want=$2 out
+    if out=$(docker exec "$id" timeout 20 ezcrypt trust </dev/null 2>&1); then
+        fail "trust succeeded: $out"
+    fi
+    echo "$out" | grep -q "$want" || fail "error does not mention '$want': $out"
+    if echo "$out" | grep -q "ezcrypt://"; then fail "a session started before the check failed: $out"; fi
+}
+no_session "$c2" "/etc/ssh/other"
+echo "PASS: shadowed setting refused before the session"
+c4=$(start_container)
+docker exec "$c4" mv /usr/sbin/sshd /usr/sbin/sshd.moved
+no_session "$c4" "could not find sshd"
+echo "PASS: missing sshd refused before the session"
+
 echo "== sshd not running"
 # A host where sshd has never started: no daemon, no pid file, no /run/sshd.
 c3=$(docker run -d --label "$label" -p 127.0.0.1::22 "$image" sleep infinity)
@@ -91,3 +108,21 @@ wait_for_sshd "$c3"
 port=$(host_port "$c3")
 login || fail "login after starting sshd"
 echo "PASS: trust with sshd stopped"
+
+echo "== escalation from ~/.local/bin"
+# sudo's secure_path leaves out ~/.local/bin, so `sudo ezcrypt` cannot find
+# it; a plain `ezcrypt trust` must rerun itself as root by absolute path.
+c5=$(start_container)
+wait_for_sshd "$c5"
+port=$(host_port "$c5")
+docker cp "$work/reply.txt" "$c5:/tmp/reply.txt"
+docker exec "$c5" sh -c 'chmod 644 /tmp/reply.txt && install -D -o admin -m 755 /usr/local/bin/ezcrypt /home/admin/.local/bin/ezcrypt && rm /usr/local/bin/ezcrypt'
+userpath='PATH=/home/admin/.local/bin:/usr/bin:/bin'
+if docker exec -u admin "$c5" sh -c "$userpath sudo ezcrypt --version" >/dev/null 2>&1; then
+    fail "sudo found ezcrypt in ~/.local/bin; this case tests nothing"
+fi
+out=$(docker exec -u admin "$c5" sh -c "$userpath ezcrypt trust --yes --from-reply /tmp/reply.txt" 2>&1) \
+    || fail "trust as a non-root user failed: $out"
+echo "$out" | grep -q "Running it with sudo" || fail "no note about sudo: $out"
+login || fail "login after escalated trust"
+echo "PASS: trust escalates with sudo"

@@ -72,7 +72,7 @@ Homepage: https://github.com/bitcrshr/ezcrypt
 Description: Use your iPhone as an SSH certificate authority
  ezcrypt pairs with the ezcrypt iPhone app through a QR code.
  "ezcrypt enroll" gets an SSH user certificate for your key from the
- phone, and "sudo ezcrypt trust" makes sshd trust the phone's user CA.
+ phone, and "ezcrypt trust" makes sshd trust the phone's user CA.
 EOF
 
 out=$outdir/ezcrypt-$arch.deb
