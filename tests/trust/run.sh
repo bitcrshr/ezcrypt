@@ -47,9 +47,16 @@ c=$(start_container)
 wait_for_sshd "$c"
 port=$(host_port "$c")
 
+# sshd re-execs itself on SIGHUP and briefly stops listening, so a login
+# right after a reload can be refused; retry for a few seconds.
 login() {
-    ssh "${SSH_OPTS[@]}" -i "$work/user" -o CertificateFile="$work/user-cert.pub" \
-        -p "$port" testuser@127.0.0.1 true
+    local i
+    for i in $(seq 1 10); do
+        ssh "${SSH_OPTS[@]}" -i "$work/user" -o CertificateFile="$work/user-cert.pub" \
+            -p "$port" testuser@127.0.0.1 true && return 0
+        sleep 0.3
+    done
+    return 1
 }
 
 if login 2>/dev/null; then fail "login worked before trust"; fi
